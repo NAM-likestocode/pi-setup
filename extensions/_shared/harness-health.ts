@@ -154,7 +154,7 @@ export async function collectHarnessChecks(agentDir: string, activeTools: string
     detail: (await exists(legacyCloudflared)) ? "unused cloudflared binary is still present" : "absent; Anywhere uses Tailscale Serve",
   });
 
-  const scaffold = ["package.json", "package-lock.json", "tsconfig.json", "vitest.config.ts", "tests", ".gitignore", "APPEND_SYSTEM.md", "scripts/responses-compaction-patch.mjs", "extensions/00-dynamic-tool-loader.ts"];
+  const scaffold = ["package.json", "package-lock.json", "tsconfig.json", "vitest.config.ts", "tests", ".gitignore", "APPEND_SYSTEM.md", "pi-lsp.json", "scripts/responses-compaction-patch.mjs", "extensions/00-dynamic-tool-loader.ts"];
   const missing = [] as string[];
   for (const relative of scaffold) if (!(await exists(join(agentDir, relative)))) missing.push(relative);
   checks.push({ level: missing.length === 0 ? "pass" : "warn", label: "Harness checks", detail: missing.length === 0 ? "typecheck/test scaffold and communication preferences present" : `missing: ${missing.join(", ")}` });

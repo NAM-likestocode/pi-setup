@@ -1,0 +1,24 @@
+{
+  "biome": {
+    "command": ["biome.cmd", "lsp-proxy"],
+    "extensions": [
+      ".astro",
+      ".cjs",
+      ".css",
+      ".cts",
+      ".graphql",
+      ".gql",
+      ".html",
+      ".js",
+      ".json",
+      ".jsonc",
+      ".jsx",
+      ".mjs",
+      ".mts",
+      ".svelte",
+      ".ts",
+      ".tsx",
+      ".vue"
+    ]
+  }
+}

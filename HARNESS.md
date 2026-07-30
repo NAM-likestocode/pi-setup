@@ -42,7 +42,7 @@ Web, context-mode, MCP, and project-subagent tools begin inactive in a fresh ses
 
 ## Code intelligence and tracing
 
-`@narumitw/pi-lsp` provides on-demand diagnostics and source fixes. It includes a default server catalog but does not install language servers; `/lsp` shows which matching commands are available on `PATH`.
+`@narumitw/pi-lsp` provides on-demand diagnostics and source fixes. The user-level `pi-lsp.json` intentionally replaces its noisy full catalog with Biome-only support for JavaScript, TypeScript, JSON, CSS, and common web files. Biome `2.5.6` is installed in Pi's managed Node prefix; `/lsp` shows whether its command is available on `PATH`.
 
 `@braintrust/pi-extension` provides optional session tracing. It remains disabled unless `TRACE_TO_BRAINTRUST=true` (or an equivalent Braintrust config) is set, so installing it alone sends nothing. Do not commit API keys or enable tracing for sensitive work without reviewing what will be shared.
 
