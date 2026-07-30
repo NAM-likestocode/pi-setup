@@ -218,6 +218,8 @@ function requestRemoteApproval(
       `Source: ${agent.source} — ${agent.filePath}`,
       `Access: ${agent.access}`,
       `Tools: ${agent.tools.join(", ") || "none"}`,
+      `Model: ${agent.model}`,
+      `Thinking: ${agent.thinking}`,
       "",
       `Exact task:\n${task}`,
       "",
@@ -270,6 +272,8 @@ async function confirmRun(
       `Source: ${agent.source} — ${agent.filePath}`,
       `Access: ${agent.access}`,
       `Tools: ${agent.tools.join(", ") || "none"}`,
+      `Model: ${agent.model}`,
+      `Thinking: ${agent.thinking}`,
       "",
       `Exact task:\n${task}`,
       "",
@@ -311,8 +315,8 @@ async function runChild(
   ].join("\n");
   await writeFile(promptFile, systemPrompt, { encoding: "utf8", mode: 0o600 });
 
-  const selectedModel = agent.model ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
-  const selectedThinking = agent.thinking ?? ctx.thinkingLevel;
+  const selectedModel = agent.model;
+  const selectedThinking = agent.thinking;
   const args = [
     "--mode", "json",
     "--print",
@@ -546,7 +550,7 @@ export default function projectSubagents(pi: ExtensionAPI): void {
         task,
         agentFile: agent.filePath,
         tools: agent.tools,
-        model: agent.model ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined),
+        model: agent.model,
         activities: [],
         usage: emptyUsage(),
       };
@@ -694,7 +698,7 @@ export default function projectSubagents(pi: ExtensionAPI): void {
       }
       const discovery = discoverProjectAgents(ctx.cwd);
       const lines = discovery.agents.map((agent) =>
-        `${agent.name} — ${agent.description} [${agent.source}, ${agent.activation}, ${agent.access}; ${agent.tools.join(", ") || "no tools"}]`,
+        `${agent.name} — ${agent.description} [${agent.source}, ${agent.activation}, ${agent.access}; ${agent.model}, ${agent.thinking}; ${agent.tools.join(", ") || "no tools"}]`,
       );
       if (discovery.diagnostics.length > 0) lines.push(`Issues: ${discovery.diagnostics.join("; ")}`);
       ctx.ui.notify(lines.length > 0 ? lines.join("\n") : "No valid specialists are configured.", discovery.diagnostics.length > 0 ? "warning" : "info");
@@ -724,7 +728,7 @@ export default function projectSubagents(pi: ExtensionAPI): void {
       `- ${agent.name} [${agent.access}]: ${agent.description}`,
     ).join("\n");
     return {
-      systemPrompt: `${event.systemPrompt}\n\nOptional specialists available:\n${list}\n\nDelegation policy:\n- Specialists are optional, not a default workflow. Use at most one only when its expected benefit clearly exceeds coordination overhead.\n- Good uses are broad unfamiliar-code mapping, genuinely multi-source current research, or an independent review of a larger or riskier change.\n- Do not delegate straightforward questions, routine commands, simple or single-file work, work already understood, or ritual validation.\n- Give the specialist one narrow task and a plain one-sentence reason. The user will see both and must approve before it starts.\n- Treat the result as evidence, not authority. Check important claims yourself and keep responsibility for the final answer.`,
+      systemPrompt: `${event.systemPrompt}\n\nOptional specialists available:\n${list}\n\nDelegation policy:\n- Specialists are optional, not a default workflow. Use at most one only when its expected benefit clearly exceeds coordination overhead.\n- Good uses are broad unfamiliar-code mapping, genuinely multi-source current research, an independent review of a larger or riskier change, or finding a supported root-cause fix before Pi would otherwise add a workaround.\n- Whenever Pi would otherwise introduce a workaround, use the workaround-fixer under this approval gate first; the parent agent then verifies and implements the clean fix.\n- Do not delegate straightforward questions, routine commands, simple or single-file work, work already understood, or ritual validation.\n- Give the specialist one narrow task and a plain one-sentence reason. The user will see both and must approve before it starts.\n- Treat the result as evidence, not authority. Check important claims yourself and keep responsibility for the final answer.`,
     };
   });
 }

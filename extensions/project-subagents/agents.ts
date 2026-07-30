@@ -1,8 +1,10 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { type Dirent, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, parse, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 export type AgentThinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export const ENFORCED_SUBAGENT_MODEL = "openai-codex/gpt-5.6-sol";
+export const ENFORCED_SUBAGENT_THINKING: AgentThinking = "xhigh";
 export type AgentSource = "user" | "project";
 export type AgentActivation = "propose" | "explicit";
 export type AgentAccess = "read-only" | "network" | "execute" | "write";
@@ -13,8 +15,8 @@ export interface ProjectAgent {
   description: string;
   systemPrompt: string;
   tools: string[];
-  model?: string;
-  thinking?: AgentThinking;
+  model: string;
+  thinking: AgentThinking;
   source: AgentSource;
   activation: AgentActivation;
   access: AgentAccess;
@@ -122,7 +124,7 @@ function loadAgentsFromDir(
 ): ProjectAgent[] {
   if (!isDirectory(dir)) return [];
 
-  let entries;
+  let entries: Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch (error) {
@@ -145,8 +147,8 @@ function loadAgentsFromDir(
     const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(content);
     const name = stringValue(frontmatter.name) ?? parse(entry.name).name;
     const description = stringValue(frontmatter.description);
-    const model = stringValue(frontmatter.model);
-    const thinkingValue = stringValue(frontmatter.thinking)?.toLowerCase() as AgentThinking | undefined;
+    const requestedModel = stringValue(frontmatter.model);
+    const requestedThinking = stringValue(frontmatter.thinking)?.toLowerCase() as AgentThinking | undefined;
     const requestedActivation = stringValue(frontmatter.activation)?.toLowerCase();
 
     if (!AGENT_NAME.test(name)) {
@@ -161,8 +163,14 @@ function loadAgentsFromDir(
       diagnostics.push(`${entry.name}: agent instructions are empty`);
       continue;
     }
-    if (thinkingValue && !THINKING_LEVELS.has(thinkingValue)) {
-      diagnostics.push(`${entry.name}: ignored invalid thinking level "${thinkingValue}"`);
+    if (requestedThinking && !THINKING_LEVELS.has(requestedThinking)) {
+      diagnostics.push(`${entry.name}: ignored invalid thinking level "${requestedThinking}"`);
+    }
+    if (requestedModel && requestedModel !== ENFORCED_SUBAGENT_MODEL) {
+      diagnostics.push(`${entry.name}: model "${requestedModel}" overridden by global policy (${ENFORCED_SUBAGENT_MODEL})`);
+    }
+    if (requestedThinking && requestedThinking !== ENFORCED_SUBAGENT_THINKING) {
+      diagnostics.push(`${entry.name}: thinking "${requestedThinking}" overridden by global policy (${ENFORCED_SUBAGENT_THINKING})`);
     }
     if (requestedActivation && requestedActivation !== "propose" && requestedActivation !== "explicit") {
       diagnostics.push(`${entry.name}: ignored invalid activation "${requestedActivation}"`);
@@ -179,8 +187,8 @@ function loadAgentsFromDir(
       description,
       systemPrompt: body.trim(),
       tools,
-      model,
-      thinking: thinkingValue && THINKING_LEVELS.has(thinkingValue) ? thinkingValue : undefined,
+      model: ENFORCED_SUBAGENT_MODEL,
+      thinking: ENFORCED_SUBAGENT_THINKING,
       source,
       activation,
       access: accessFor(tools, capabilities),

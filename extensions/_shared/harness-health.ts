@@ -159,7 +159,7 @@ export async function collectHarnessChecks(agentDir: string, activeTools: string
   for (const relative of scaffold) if (!(await exists(join(agentDir, relative)))) missing.push(relative);
   checks.push({ level: missing.length === 0 ? "pass" : "warn", label: "Harness checks", detail: missing.length === 0 ? "typecheck/test scaffold and communication preferences present" : `missing: ${missing.join(", ")}` });
 
-  const specialistFiles = ["scout.md", "researcher.md", "reviewer.md"];
+  const specialistFiles = ["scout.md", "researcher.md", "reviewer.md", "workaround-fixer.md"];
   const specialistIssues: string[] = [];
   for (const file of specialistFiles) {
     try {
@@ -167,6 +167,8 @@ export async function collectHarnessChecks(agentDir: string, activeTools: string
       const frontmatter = source.split("---")[1] ?? "";
       const tools = frontmatter.match(/^tools:\s*(.+)$/m)?.[1] ?? "";
       if (!/^activation:\s*propose\s*$/m.test(frontmatter)) specialistIssues.push(`${file}: not proposal-enabled`);
+      if (!/^model:\s*openai-codex\/gpt-5\.6-sol\s*$/m.test(frontmatter)) specialistIssues.push(`${file}: model is not openai-codex/gpt-5.6-sol`);
+      if (!/^thinking:\s*xhigh\s*$/m.test(frontmatter)) specialistIssues.push(`${file}: thinking is not xhigh`);
       if (/(?:^|,\s*)(?:bash|edit|write)(?:\s*,|$)/i.test(tools)) specialistIssues.push(`${file}: has mutating or shell access`);
     } catch {
       specialistIssues.push(`${file}: missing`);
@@ -175,7 +177,7 @@ export async function collectHarnessChecks(agentDir: string, activeTools: string
   checks.push({
     level: specialistIssues.length === 0 ? "pass" : "fail",
     label: "Specialist roster",
-    detail: specialistIssues.length === 0 ? "scout, researcher, and reviewer are proposal-enabled without edit or shell access" : specialistIssues.join("; "),
+    detail: specialistIssues.length === 0 ? "four trusted specialists use gpt-5.6-sol/xhigh and have no edit or shell access" : specialistIssues.join("; "),
   });
 
   checks.push({

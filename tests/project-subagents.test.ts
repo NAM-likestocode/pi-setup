@@ -31,11 +31,11 @@ describe("trusted specialist discovery", () => {
     mkdirSync(project, { recursive: true });
 
     writeFileSync(join(userAgentsDir, "scout.md"), agentFile(
-      "name: scout\ndescription: Maps code\ntools: read, grep, find, ls\nactivation: propose\nthinking: medium",
+      "name: scout\ndescription: Maps code\ntools: read, grep, find, ls\nactivation: propose\nmodel: openai-codex/gpt-5.6-sol\nthinking: xhigh",
       "Inspect only the delegated area.",
     ));
     writeFileSync(join(userAgentsDir, "researcher.md"), agentFile(
-      "name: researcher\ndescription: Researches the web\ntools: web_search, source_check\nactivation: propose\ncapabilities: web",
+      "name: researcher\ndescription: Researches the web\ntools: web_search, source_check\nactivation: propose\ncapabilities: web\nmodel: openai-codex/gpt-5.6-sol\nthinking: xhigh",
       "Use strong sources.",
     ));
 
@@ -49,12 +49,16 @@ describe("trusted specialist discovery", () => {
       source: "user",
       activation: "propose",
       access: "read-only",
+      model: "openai-codex/gpt-5.6-sol",
+      thinking: "xhigh",
       extensionPaths: [],
     });
     expect(discovery.agents.find((agent) => agent.name === "researcher")).toMatchObject({
       source: "user",
       activation: "propose",
       access: "network",
+      model: "openai-codex/gpt-5.6-sol",
+      thinking: "xhigh",
       extensionPaths: [join(root, "approved-web.ts")],
     });
   });
@@ -93,9 +97,32 @@ describe("trusted specialist discovery", () => {
       access: "write",
       capabilities: [],
       tools: ["read", "edit"],
+      model: "openai-codex/gpt-5.6-sol",
+      thinking: "xhigh",
       extensionPaths: [],
     });
     expect(discovery.diagnostics.some((message) => message.includes("cannot replace the trusted user agent"))).toBe(true);
     expect(discovery.diagnostics.some((message) => message.includes("cannot load extra child capabilities"))).toBe(true);
+  });
+
+  it("enforces the global model and thinking policy over agent frontmatter", () => {
+    const root = tempDirectory();
+    const userAgentsDir = join(root, "user-agents");
+    const project = join(root, "project");
+    mkdirSync(userAgentsDir, { recursive: true });
+    mkdirSync(project, { recursive: true });
+
+    writeFileSync(join(userAgentsDir, "custom.md"), agentFile(
+      "name: custom\ndescription: Requests a different model\nmodel: another-provider/another-model\nthinking: medium\nactivation: propose",
+      "Inspect only the delegated task.",
+    ));
+
+    const discovery = discoverProjectAgents(project, { userAgentsDir });
+
+    expect(discovery.agents[0]).toMatchObject({
+      model: "openai-codex/gpt-5.6-sol",
+      thinking: "xhigh",
+    });
+    expect(discovery.diagnostics.filter((message) => message.includes("overridden by global policy"))).toHaveLength(2);
   });
 });

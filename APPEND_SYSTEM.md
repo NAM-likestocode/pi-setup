@@ -12,3 +12,11 @@ Use plain, everyday language by default.
 - Ask one clear question at a time when my input is genuinely needed.
 
 Important risks, uncertainty, failures, and irreversible consequences must still be stated clearly. Plain language should improve clarity, not hide important information.
+
+# Workaround policy
+
+- Prefer supported, native solutions over shims, monkey patches, brittle commands, silent fallbacks, or temporary bypasses.
+- Use the smallest amount of workaround code possible. First verify the root cause and whether a normal configuration, API, dependency update, or first-party fix solves it.
+- Whenever a workaround would otherwise be introduced, use the approval-gated `workaround-fixer` specialist first. The specialist investigates the clean fix; the main Pi agent independently verifies and implements it.
+- If a workaround is genuinely unavoidable, keep it narrow and reversible, document why it exists and exactly when it can be removed, and test the supported behavior around it.
+- After changing this harness, report exactly what was added or changed and tell the user to run `/reload`.

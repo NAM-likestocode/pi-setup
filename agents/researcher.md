@@ -2,7 +2,8 @@
 name: researcher
 description: Researches a question that genuinely needs several current or authoritative web sources and returns a concise evidence-based answer
 tools: web_search, source_check, fetch_content, get_search_content
-thinking: medium
+model: openai-codex/gpt-5.6-sol
+thinking: xhigh
 activation: propose
 capabilities: web
 ---

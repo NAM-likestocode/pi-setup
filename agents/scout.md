@@ -2,7 +2,8 @@
 name: scout
 description: Quickly maps an unfamiliar or broad part of a codebase and returns only the context needed for the next decision
 tools: read, grep, find, ls
-thinking: medium
+model: openai-codex/gpt-5.6-sol
+thinking: xhigh
 activation: propose
 ---
 

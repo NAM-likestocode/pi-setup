@@ -40,6 +40,7 @@ describe("dynamic tool loader", () => {
     expect(shouldConsiderSubagent("research the current options and cite sources")).toBe(true);
     expect(shouldConsiderSubagent("audit this security-sensitive change")).toBe(true);
     expect(shouldConsiderSubagent("map the architecture across the codebase")).toBe(true);
+    expect(shouldConsiderSubagent("add a temporary workaround for this package bug")).toBe(true);
     expect(shouldConsiderSubagent("rename this variable in one file")).toBe(false);
     expect(shouldConsiderSubagent("what does this error mean?")).toBe(false);
   });

@@ -30,7 +30,7 @@ const TOOL_ALIASES: Record<string, string> = {
   fetch_content: "fetch url webpage github youtube video transcript content",
   get_search_content: "retrieve previous web result full page content response id",
   mcp: "model context protocol external server gateway remote tools",
-  subagent: "delegate delegation another agent project worker researcher",
+  subagent: "delegate delegation another agent project worker researcher workaround root cause permanent fix native supported shim hack",
   ctx_execute: "run command tests build logs shell cli api response sandbox context mode",
   ctx_execute_file: "analyze large file log csv json source code parse context mode",
   ctx_index: "index local documentation project knowledge base context mode",
@@ -60,9 +60,10 @@ export function shouldConsiderSubagent(prompt: string): boolean {
   const explicit = /\b(?:sub[ -]?agents?|delegat(?:e|ion)|another agent)\b/.test(text);
   const research = /\b(?:research|fact[- ]?check|benchmark|sources?|current|latest|up[- ]to[- ]date)\b/.test(text);
   const review = /\b(?:review|audit|security|threat model|regression|risk assessment)\b/.test(text);
+  const workaround = /\b(?:workarounds?|work[ -]?around|hacks?|shim|monkey[ -]?patch|temporary fix|fallback)\b/.test(text);
   const broadScope = /\b(?:codebase|repository|repo-wide|cross-cutting|architecture|multiple modules|across the project)\b/.test(text);
   const investigation = /\b(?:explore|map|trace|locate|understand|investigate|find all)\b/.test(text);
-  return explicit || research || review || (broadScope && investigation);
+  return explicit || research || review || workaround || (broadScope && investigation);
 }
 
 export function searchDynamicTools(tools: ToolInfo[], query: string, limit = 5): string[] {
