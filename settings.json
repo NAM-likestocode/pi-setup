@@ -10,6 +10,8 @@
     "git:github.com/edlsh/pi-ask-user@1ad2adf7010c4ac5068668b6999bc1eb98a864a7",
     "npm:context-mode@1.0.169",
     "npm:pi-web-access@0.15.0",
-    "npm:pi-mcp-adapter@2.15.0"
+    "npm:pi-mcp-adapter@2.15.0",
+    "npm:@narumitw/pi-lsp@0.39.0",
+    "npm:@braintrust/pi-extension@0.10.0"
   ]
 }

@@ -11,6 +11,8 @@ This directory is the versionable source of the global Pi harness. Runtime crede
 | `context-mode` | `1.0.169` |
 | `pi-web-access` | `0.15.0` |
 | `pi-mcp-adapter` | `2.15.0` |
+| `@narumitw/pi-lsp` | `0.39.0` |
+| `@braintrust/pi-extension` | `0.10.0` |
 
 The Anywhere compatibility patch is `extensions/anywhere/pi-ask-user-anywhere.patch`, expected SHA-256 `3e3f8f1f41b04169dea175bcc7ad8742170663076ac8288335a45e7e5cc836e3`.
 
@@ -37,6 +39,12 @@ Web, context-mode, MCP, and project-subagent tools begin inactive in a fresh ses
 - `/tool-loader status` lists loaded dynamic tools.
 - `/tool-loader reset` returns those groups to on-demand loading.
 - Clear research, review, or broad code-mapping prompts may expose the `subagent` tool; this only makes a specialist available and never starts one.
+
+## Code intelligence and tracing
+
+`@narumitw/pi-lsp` provides on-demand diagnostics and source fixes. It includes a default server catalog but does not install language servers; `/lsp` shows which matching commands are available on `PATH`.
+
+`@braintrust/pi-extension` provides optional session tracing. It remains disabled unless `TRACE_TO_BRAINTRUST=true` (or an equivalent Braintrust config) is set, so installing it alone sends nothing. Do not commit API keys or enable tracing for sensitive work without reviewing what will be shared.
 
 ## Communication style
 

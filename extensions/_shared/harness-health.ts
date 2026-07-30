@@ -14,12 +14,16 @@ export const EXPECTED_PACKAGE_SPECS = [
   "npm:context-mode@1.0.169",
   "npm:pi-web-access@0.15.0",
   "npm:pi-mcp-adapter@2.15.0",
+  "npm:@narumitw/pi-lsp@0.39.0",
+  "npm:@braintrust/pi-extension@0.10.0",
 ] as const;
 
 const EXPECTED_NPM_VERSIONS: Record<string, string> = {
   "context-mode": "1.0.169",
   "pi-web-access": "0.15.0",
   "pi-mcp-adapter": "2.15.0",
+  "@narumitw/pi-lsp": "0.39.0",
+  "@braintrust/pi-extension": "0.10.0",
 };
 const EXPECTED_ASK_USER_VERSION = "0.13.0";
 const EXPECTED_PATCH_SHA256 = "3e3f8f1f41b04169dea175bcc7ad8742170663076ac8288335a45e7e5cc836e3";
