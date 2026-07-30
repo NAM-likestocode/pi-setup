@@ -16,7 +16,7 @@ This directory is the versionable source of the global Pi harness. Runtime crede
 
 The Anywhere compatibility patch is `extensions/anywhere/pi-ask-user-anywhere.patch`, expected SHA-256 `3e3f8f1f41b04169dea175bcc7ad8742170663076ac8288335a45e7e5cc836e3`.
 
-The retired Cloudflared executable was removed because the current Anywhere implementation exclusively uses Tailscale Serve and contains no Cloudflared references.
+The retired Cloudflared executable was removed because the current Anywhere implementation exclusively uses Tailscale Serve and contains no Cloudflared references. `/Anywhere off` works across Pi instances and removes only Anywhere's HTTPS port 443 handler rather than resetting unrelated Serve routes.
 
 ## Responses API continuity and compaction
 

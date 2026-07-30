@@ -16,7 +16,7 @@ Commands:
 - `/Anywhere` or `/Anywhere start` — start private HTTPS access and show a pairing link.
 - `/Anywhere status` — show whether it is active and paired.
 - `/Anywhere pair` — revoke the current device and make a new one-time pairing link.
-- `/Anywhere off` — revoke access and remove the private route.
+- `/Anywhere off` — revoke access and remove Anywhere's HTTPS route, even if another Pi instance started it.
 
 ## What it does
 
@@ -40,6 +40,7 @@ Defense layers:
 
 - Tailscale membership and WireGuard encryption restrict network access to your tailnet.
 - Tailscale Serve provides HTTPS with your tailnet MagicDNS hostname.
+- Cross-instance shutdown removes only Anywhere's HTTPS port 443 handler; it does not reset unrelated Tailscale Serve routes on other ports.
 - A per-session, one-time 256-bit pairing secret and a distinct remembered device token protect the application itself.
 - The server uses constant-time token comparison, one-device pairing, immediate revocation, request-size limits, separate read/write rate limits, strict Host/Origin checks, and no cookies.
 - The page uses `no-store`, CSP, no-referrer, frame-denial, no third-party resources, and text-only DOM rendering.

@@ -322,8 +322,13 @@ async function startTailscaleServe(executable: string, port: number): Promise<vo
    throw new Error("Tailscale could not start its private HTTPS proxy.");
 }
 
-async function stopTailscaleServe(executable: string): Promise<void> {
-   await runCommand(executable, ["serve", "reset"]);
+type CommandRunner = (executable: string, args: string[], timeoutMs?: number) => Promise<CommandResult>;
+
+export async function stopTailscaleServe(executable: string, runner: CommandRunner = runCommand): Promise<boolean> {
+   const result = await runner(executable, ["serve", "--https=443", "off"]);
+   if (result.code === 0) return true;
+   if (/handler (?:does not exist|not found)/i.test(`${result.stdout}\n${result.stderr}`)) return false;
+   throw new Error("Tailscale could not remove Anywhere's private HTTPS route.");
 }
 
 async function waitForTailscaleServe(url: string, timeoutMs = 30_000): Promise<void> {
@@ -421,7 +426,7 @@ class AnywhereBridge {
       }
    }
 
-   async stop(reason = "Anywhere access stopped."): Promise<void> {
+   async stop(reason = "Anywhere access stopped.", reportTailscaleError = false): Promise<void> {
       const pending = this.pendingQuestion;
       this.pendingQuestion = undefined;
       pending?.cleanup();
@@ -442,8 +447,13 @@ class AnywhereBridge {
       const tailscaleServeActive = this.tailscaleServeActive;
       this.tailscaleExecutable = undefined;
       this.tailscaleServeActive = false;
+      let tailscaleError: unknown;
       if (tailscaleServeActive && tailscaleExecutable) {
-         await stopTailscaleServe(tailscaleExecutable).catch(() => undefined);
+         try {
+            await stopTailscaleServe(tailscaleExecutable);
+         } catch (error) {
+            tailscaleError = error;
+         }
       }
 
       const server = this.server;
@@ -454,6 +464,7 @@ class AnywhereBridge {
 
       this.ctx?.ui.setWidget(WIDGET_ID, undefined);
       this.ctx?.ui.setStatus(STATUS_ID, undefined);
+      if (tailscaleError && reportTailscaleError) throw tailscaleError;
       this.ctx?.ui.notify(reason, "info");
    }
 
@@ -838,15 +849,28 @@ export default function anywhere(pi: ExtensionAPI) {
    });
 
    pi.registerCommand("Anywhere", {
-      description: "Open a secure phone chat for this Pi session (start, status, pair, off)",
+      description: "Open a secure phone chat for this Pi session (start, status, pair, cross-instance off)",
       handler: async (args, ctx) => {
          const action = args.trim().toLowerCase();
          if (action === "off" || action === "stop") {
-            if (!bridge.isActive) {
-               ctx.ui.notify("Anywhere is already off.", "info");
-               return;
+            try {
+               if (bridge.isActive) {
+                  await bridge.stop("Anywhere access was revoked.", true);
+                  return;
+               }
+               const removed = await stopTailscaleServe(await findTailscale());
+               ctx.ui.setWidget(WIDGET_ID, undefined);
+               ctx.ui.setStatus(STATUS_ID, undefined);
+               ctx.ui.notify(
+                  removed
+                     ? "Anywhere access was revoked, including the Tailscale route left by another Pi instance."
+                     : "Anywhere is already off.",
+                  "info",
+               );
+            } catch (error) {
+               const message = error instanceof Error ? error.message : "Unknown shutdown error.";
+               ctx.ui.notify(`Anywhere could not stop: ${message}`, "error");
             }
-            await bridge.stop("Anywhere access was revoked.");
             return;
          }
 
