@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "name": "tokyo-night-sol-warning",
+  "vars": {
+    "blue": "#7aa2f7", "purple": "#bb9af7", "cyan": "#7dcfff", "green": "#9ece6a", "yellow": "#e0af68", "red": "#f7768e", "text": "#c0caf5", "muted": "#a9b1d6", "dim": "#565f89", "bg": "#1a1b26", "selection": "#283457", "tool": "#1f2335"
+  },
+  "colors": {
+    "accent": "blue", "border": "#3b4261", "borderAccent": "blue", "borderMuted": "#292e42",
+    "success": "green", "error": "red", "warning": "yellow", "muted": "muted", "dim": "dim", "text": "text", "thinkingText": "muted",
+    "selectedBg": "selection", "userMessageBg": "#24283b", "userMessageText": "text", "customMessageBg": "tool", "customMessageText": "text", "customMessageLabel": "cyan",
+    "toolPendingBg": "#1f2335", "toolSuccessBg": "#1d3028", "toolErrorBg": "#382535", "toolTitle": "purple", "toolOutput": "text",
+    "mdHeading": "purple", "mdLink": "cyan", "mdLinkUrl": "blue", "mdCode": "green", "mdCodeBlock": "text", "mdCodeBlockBorder": "#3b4261", "mdQuote": "muted", "mdQuoteBorder": "#3b4261", "mdHr": "#3b4261", "mdListBullet": "blue",
+    "toolDiffAdded": "green", "toolDiffRemoved": "red", "toolDiffContext": "muted",
+    "syntaxComment": "dim", "syntaxKeyword": "purple", "syntaxFunction": "blue", "syntaxVariable": "text", "syntaxString": "green", "syntaxNumber": "yellow", "syntaxType": "cyan", "syntaxOperator": "cyan", "syntaxPunctuation": "muted",
+    "thinkingOff": "red", "thinkingMinimal": "red", "thinkingLow": "red", "thinkingMedium": "red", "thinkingHigh": "red", "thinkingXhigh": "red", "thinkingMax": "red", "bashMode": "yellow"
+  }
+}

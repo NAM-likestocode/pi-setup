@@ -1,0 +1,23 @@
+# Credentials and machine/session state
+auth.json
+trust.json
+sessions/
+run-history.jsonl
+mcp-cache.json
+models-store.json
+models-store.json.*
+*.bak*
+AGENTS.md
+
+# Pi-managed third-party package stores
+npm/
+git/
+
+# Harness dependencies and generated output
+node_modules/
+coverage/
+*.log
+
+# Local executables and retired tunnel artifacts
+bin/
+extensions/anywhere/bin/

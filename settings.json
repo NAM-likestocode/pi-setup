@@ -1,0 +1,15 @@
+{
+  "lastChangelogVersion": "0.82.1",
+  "theme": "tokyo-night-sol-warning",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-sol",
+  "defaultThinkingLevel": "xhigh",
+  "defaultProjectTrust": "ask",
+  "packages": [
+    "git:github.com/MasuRii/pi-image-tools@b8977bbb4f416fd63db7c7c602db6dfe7b17f62c",
+    "git:github.com/edlsh/pi-ask-user@1ad2adf7010c4ac5068668b6999bc1eb98a864a7",
+    "npm:context-mode@1.0.169",
+    "npm:pi-web-access@0.15.0",
+    "npm:pi-mcp-adapter@2.15.0"
+  ]
+}

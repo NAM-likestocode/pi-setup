@@ -1,0 +1,19 @@
+{
+  "name": "fool-pi-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "patch:responses": "node scripts/responses-compaction-patch.mjs --apply",
+    "patch:check": "node scripts/responses-compaction-patch.mjs --check",
+    "patch:revert": "node scripts/responses-compaction-patch.mjs --revert",
+    "check": "npm run typecheck && npm test && npm run patch:check"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "typescript": "5.9.3",
+    "vitest": "4.1.9"
+  }
+}
