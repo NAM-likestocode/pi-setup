@@ -36,7 +36,23 @@ Web, context-mode, MCP, and project-subagent tools begin inactive in a fresh ses
 
 - `/tool-loader status` lists loaded dynamic tools.
 - `/tool-loader reset` returns those groups to on-demand loading.
-- Explicit delegation prompts activate `subagent`; approval remains mandatory.
+- Clear research, review, or broad code-mapping prompts may expose the `subagent` tool; this only makes a specialist available and never starts one.
+
+## Communication style
+
+`APPEND_SYSTEM.md` asks Pi to lead with the answer, use plain language, avoid unnecessary jargon and implementation narration, and keep deeper technical detail optional. Risks and uncertainty must still be stated clearly.
+
+## Trusted specialists
+
+The default user-level roster in `agents/` is deliberately small:
+
+- `scout` maps unfamiliar or broad code areas;
+- `researcher` performs genuinely multi-source web research through the pinned `pi-web-access` child capability;
+- `reviewer` independently checks larger or riskier changes.
+
+All three are proposal-enabled but have no edit or shell access. A run requires a plain-language reason, one narrow task, and user approval before the child process starts. Only one child can run at a time. Project-local agents remain explicit-request only, cannot replace a trusted user specialist, and cannot load extra child extensions. The parent agent must check important claims rather than treating a child result as authoritative.
+
+Use `/subagents` to inspect the effective roster and `/delegation off` to disable new runs for the session.
 
 ## Validation
 
@@ -50,6 +66,7 @@ Inside Pi, run `/reload`, followed by `/harness-doctor`.
 ## Safety boundaries
 
 - Project trust is explicitly `ask`.
+- Specialist runs are isolated, approval-gated, single-child, and non-editing by default.
 - Package specs are pinned to reviewed versions or commits.
 - Detailed plan mode activates a restricted inspection profile. Tests, builds, scripts, pipelines, redirection, and unreviewed tools remain unavailable until `/plan-implement`.
 - Remembered notes are capped per note, per scope, and by total injected context; writes use a temporary file and atomic rename.

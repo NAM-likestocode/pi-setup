@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
-import { isDynamicTool, searchDynamicTools } from "../extensions/00-dynamic-tool-loader.ts";
+import { isDynamicTool, searchDynamicTools, shouldConsiderSubagent } from "../extensions/00-dynamic-tool-loader.ts";
 
 const tools = [
   { name: "read", description: "Read a file" },
@@ -33,5 +33,14 @@ describe("dynamic tool loader", () => {
 
   it("does not return always-active built-ins", () => {
     expect(searchDynamicTools(tools, "read a file", 10)).not.toContain("read");
+  });
+
+  it("surfaces specialists only for explicit or high-value work", () => {
+    expect(shouldConsiderSubagent("delegate this research to another agent")).toBe(true);
+    expect(shouldConsiderSubagent("research the current options and cite sources")).toBe(true);
+    expect(shouldConsiderSubagent("audit this security-sensitive change")).toBe(true);
+    expect(shouldConsiderSubagent("map the architecture across the codebase")).toBe(true);
+    expect(shouldConsiderSubagent("rename this variable in one file")).toBe(false);
+    expect(shouldConsiderSubagent("what does this error mean?")).toBe(false);
   });
 });

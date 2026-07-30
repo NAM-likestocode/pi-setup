@@ -55,6 +55,16 @@ export function isDynamicTool(name: string): boolean {
   return DYNAMIC_TOOL_NAMES.has(name);
 }
 
+export function shouldConsiderSubagent(prompt: string): boolean {
+  const text = prompt.toLowerCase();
+  const explicit = /\b(?:sub[ -]?agents?|delegat(?:e|ion)|another agent)\b/.test(text);
+  const research = /\b(?:research|fact[- ]?check|benchmark|sources?|current|latest|up[- ]to[- ]date)\b/.test(text);
+  const review = /\b(?:review|audit|security|threat model|regression|risk assessment)\b/.test(text);
+  const broadScope = /\b(?:codebase|repository|repo-wide|cross-cutting|architecture|multiple modules|across the project)\b/.test(text);
+  const investigation = /\b(?:explore|map|trace|locate|understand|investigate|find all)\b/.test(text);
+  return explicit || research || review || (broadScope && investigation);
+}
+
 export function searchDynamicTools(tools: ToolInfo[], query: string, limit = 5): string[] {
   const terms = query.toLowerCase().split(/[^a-z0-9_.:-]+/).filter((term) => term.length > 1);
   return tools
@@ -147,8 +157,7 @@ export default function dynamicToolLoader(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", async (event) => {
-    if (typeof event.prompt !== "string") return;
-    if (!/\b(?:sub[ -]?agents?|delegat(?:e|ion)|another agent)\b/i.test(event.prompt)) return;
+    if (typeof event.prompt !== "string" || !shouldConsiderSubagent(event.prompt)) return;
     activate(["subagent"]);
   });
 }

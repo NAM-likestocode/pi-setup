@@ -19,6 +19,7 @@ import {
   dashboardActivityForTool,
   type DashboardActivity,
 } from "../_shared/dashboard-activity.ts";
+import { shouldConsiderSubagent } from "../00-dynamic-tool-loader.ts";
 import { discoverProjectAgents, type ProjectAgent } from "./agents.ts";
 
 const ASK_PROTOCOL_VERSION = 1;
@@ -42,6 +43,10 @@ interface SubagentDetails {
   runId: string;
   status: "awaiting-approval" | "running" | "completed" | "cancelled" | "failed";
   agent: string;
+  source: ProjectAgent["source"];
+  activation: ProjectAgent["activation"];
+  access: ProjectAgent["access"];
+  reason: string;
   task: string;
   agentFile: string;
   tools: string[];
@@ -181,6 +186,7 @@ function requestRemoteApproval(
   pi: ExtensionAPI,
   runId: string,
   agent: ProjectAgent,
+  reason: string,
   task: string,
   signal: AbortSignal | undefined,
 ): Promise<boolean> | undefined {
@@ -205,15 +211,17 @@ function requestRemoteApproval(
   pi.events.emit(ASK_REQUEST_CHANNEL, {
     version: ASK_PROTOCOL_VERSION,
     id: runId,
-    question: `Run project subagent “${agent.name}”?`,
+    question: `Run specialist “${agent.name}”?`,
     context: [
       agent.description,
-      `Source: ${agent.filePath}`,
+      `Why Pi recommends it: ${reason}`,
+      `Source: ${agent.source} — ${agent.filePath}`,
+      `Access: ${agent.access}`,
       `Tools: ${agent.tools.join(", ") || "none"}`,
       "",
-      `Task:\n${task}`,
+      `Exact task:\n${task}`,
       "",
-      "No child process has started yet.",
+      "No child process has started. The main Pi agent remains responsible for checking the result.",
     ].join("\n"),
     options: [
       { title: "Run subagent", description: "Approve this one project-specific run" },
@@ -247,22 +255,25 @@ async function confirmRun(
   ctx: ExtensionContext,
   runId: string,
   agent: ProjectAgent,
+  reason: string,
   task: string,
   signal: AbortSignal | undefined,
 ): Promise<boolean> {
-  const remote = requestRemoteApproval(pi, runId, agent, task, signal);
+  const remote = requestRemoteApproval(pi, runId, agent, reason, task, signal);
   if (remote) return await remote;
   if (!ctx.hasUI) return false;
   return await ctx.ui.confirm(
-    `Run project subagent “${agent.name}”?`,
+    `Run specialist “${agent.name}”?`,
     [
       agent.description,
-      `Source: ${agent.filePath}`,
+      `Why Pi recommends it: ${reason}`,
+      `Source: ${agent.source} — ${agent.filePath}`,
+      `Access: ${agent.access}`,
       `Tools: ${agent.tools.join(", ") || "none"}`,
       "",
-      `Task:\n${task}`,
+      `Exact task:\n${task}`,
       "",
-      "No child process has started yet.",
+      "No child process has started. The main Pi agent remains responsible for checking the result.",
     ].join("\n"),
     signal ? { signal } : undefined,
   );
@@ -283,6 +294,7 @@ async function runChild(
   ctx: ExtensionContext,
   runId: string,
   agent: ProjectAgent,
+  reason: string,
   task: string,
   signal: AbortSignal | undefined,
   onProgress: (details: SubagentDetails) => void,
@@ -290,11 +302,12 @@ async function runChild(
   const promptDir = await mkdtemp(join(tmpdir(), "pi-project-subagent-"));
   const promptFile = join(promptDir, `${agent.name}-prompt.md`);
   const systemPrompt = [
-    `You are the project-defined subagent “${agent.name}”.`,
+    `You are the trusted ${agent.source}-level specialist “${agent.name}”.`,
     agent.systemPrompt,
     "",
-    "Run boundary: complete only the delegated task. Do not broaden the scope, launch other agents, or add review/planning work unless the task explicitly asks for it.",
-    "Report what you did, commands or checks that matter, and any files changed.",
+    "Run boundary: complete only the exact delegated task. Do not broaden the scope, launch other agents, or make changes outside that task.",
+    "Keep the result short and plain. Lead with the answer, include only useful evidence, and clearly label uncertainty.",
+    "Do not claim that you edited, executed, or verified anything your available tools could not actually do.",
   ].join("\n");
   await writeFile(promptFile, systemPrompt, { encoding: "utf8", mode: 0o600 });
 
@@ -305,9 +318,12 @@ async function runChild(
     "--print",
     "--no-session",
     "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
     "--approve",
     "--append-system-prompt", promptFile,
   ];
+  for (const extensionPath of agent.extensionPaths) args.push("--extension", extensionPath);
   if (agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
   else args.push("--no-tools");
   if (selectedModel) args.push("--model", selectedModel);
@@ -328,6 +344,10 @@ async function runChild(
     runId,
     status: "running",
     agent: agent.name,
+    source: agent.source,
+    activation: agent.activation,
+    access: agent.access,
+    reason,
     task,
     agentFile: agent.filePath,
     tools: agent.tools,
@@ -474,8 +494,9 @@ function resultText(result: AgentToolResult<SubagentDetails>): string {
 }
 
 const SubagentParams = Type.Object({
-  agent: Type.String({ description: "Name of an agent defined in the current project's .pi/agents directory" }),
-  task: Type.String({ minLength: 1, maxLength: MAX_TASK_CHARS, description: "The exact project-specific task the user asked to delegate" }),
+  agent: Type.String({ description: "Name of an available user or project specialist" }),
+  reason: Type.String({ minLength: 1, maxLength: 500, description: "One plain sentence explaining why this specialist is worth the coordination overhead" }),
+  task: Type.String({ minLength: 1, maxLength: MAX_TASK_CHARS, description: "A narrow, exact task with a clear expected result" }),
 });
 
 export default function projectSubagents(pi: ExtensionAPI): void {
@@ -485,28 +506,31 @@ export default function projectSubagents(pi: ExtensionAPI): void {
 
   pi.registerTool({
     name: "subagent",
-    label: "Project Subagent",
-    description: "Ask one project-defined subagent to perform one explicitly user-requested task in an isolated Pi process. Agents are loaded only from the nearest .pi/agents directory. Every run requires user approval before the child process starts. There are no built-in agents, automatic reviews, chains, or workflows.",
-    promptSnippet: "Run one explicitly requested project-local subagent after user approval",
+    label: "Specialist",
+    description: "Ask one trusted user-level or project-level specialist to perform a narrow task in an isolated Pi process. Use it only when independent investigation or review will materially improve the result. Every run shows the reason, exact task, source, access, and tools for user approval before the child starts.",
+    promptSnippet: "Use one approved specialist only when its benefit clearly exceeds delegation overhead",
     promptGuidelines: [
-      "Use subagent only when the user explicitly asks the main Pi agent to delegate work to a subagent.",
-      "Never use subagent for automatic review, planning, scouting, validation, or follow-up work that the user did not request.",
-      "Call subagent once per requested task; do not create chains or swarms. Every call is shown to the user for approval before work starts.",
+      "Use subagent only for a bounded investigation or independent review that will materially improve accuracy or keep substantial research out of the parent context.",
+      "Do not use subagent for straightforward questions, routine commands, simple or single-file work, work already understood, or as a ritual review step.",
+      "Prefer proposal-enabled scout, researcher, or reviewer agents; project-defined and editing agents are explicit-request only.",
+      "Call subagent at most once for a task, never create chains or swarms, and independently check important claims before acting on the result.",
     ],
     parameters: SubagentParams,
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const reason = params.reason.trim();
       const task = params.task.trim();
-      if (!task) throw new Error("Subagent task cannot be empty.");
-      if (!ctx.isProjectTrusted()) throw new Error("Project subagents are disabled because this project is not trusted.");
-      if (activeRunId) throw new Error("A project subagent is already active. Wait for it to finish before requesting another run.");
+      if (!reason) throw new Error("Explain in one sentence why this specialist is worth using.");
+      if (!task) throw new Error("Specialist task cannot be empty.");
+      if (!ctx.isProjectTrusted()) throw new Error("Specialists are disabled because this project is not trusted.");
+      if (activeRunId) throw new Error("A specialist is already active. Wait for it to finish before requesting another run.");
 
       const discovery = discoverProjectAgents(ctx.cwd);
       const agent = discovery.agents.find((candidate) => candidate.name === params.agent);
       if (!agent) {
         const available = discovery.agents.map((candidate) => candidate.name).join(", ") || "none";
         const diagnostics = discovery.diagnostics.length > 0 ? `\nConfiguration issues: ${discovery.diagnostics.join("; ")}` : "";
-        throw new Error(`Unknown project agent “${params.agent}”. Available agents: ${available}.${diagnostics}`);
+        throw new Error(`Unknown specialist “${params.agent}”. Available specialists: ${available}.${diagnostics}`);
       }
 
       const runId = `subagent-${toolCallId || randomUUID()}`;
@@ -515,6 +539,10 @@ export default function projectSubagents(pi: ExtensionAPI): void {
         runId,
         status: "awaiting-approval",
         agent: agent.name,
+        source: agent.source,
+        activation: agent.activation,
+        access: agent.access,
+        reason,
         task,
         agentFile: agent.filePath,
         tools: agent.tools,
@@ -525,7 +553,7 @@ export default function projectSubagents(pi: ExtensionAPI): void {
       onUpdate?.({ content: [{ type: "text", text: `Waiting for approval to run ${agent.name}…` }], details: initialDetails });
 
       try {
-        const approved = await confirmRun(pi, ctx, runId, agent, task, signal);
+        const approved = await confirmRun(pi, ctx, runId, agent, reason, task, signal);
         if (!approved) {
           return {
             content: [{ type: "text", text: `Subagent ${agent.name} was not started because the user did not approve this run.` }],
@@ -545,7 +573,7 @@ export default function projectSubagents(pi: ExtensionAPI): void {
         };
         let child: ChildRunResult;
         try {
-          child = await runChild(pi, ctx, runId, agent, task, signal, update);
+          child = await runChild(pi, ctx, runId, agent, reason, task, signal, update);
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           emitActivity(pi, lifecycleActivity(runId, "end", agent, task, true, detail));
@@ -571,6 +599,10 @@ export default function projectSubagents(pi: ExtensionAPI): void {
             runId,
             status: "completed",
             agent: agent.name,
+            source: agent.source,
+            activation: agent.activation,
+            access: agent.access,
+            reason,
             task,
             agentFile: agent.filePath,
             tools: agent.tools,
@@ -593,7 +625,7 @@ export default function projectSubagents(pi: ExtensionAPI): void {
       const task = typeof args.task === "string" ? args.task : "…";
       const preview = task.length > 100 ? `${task.slice(0, 100)}…` : task;
       return new Text(
-        `${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", String(args.agent ?? "…"))}\n${theme.fg("dim", preview)}`,
+        `${theme.fg("toolTitle", theme.bold("specialist"))} ${theme.fg("accent", String(args.agent ?? "…"))}\n${theme.fg("dim", preview)}`,
         0,
         0,
       );
@@ -625,6 +657,8 @@ export default function projectSubagents(pi: ExtensionAPI): void {
 
       const container = new Container();
       container.addChild(new Text(header, 0, 0));
+      container.addChild(new Text(theme.fg("dim", `Why: ${details.reason}`), 0, 0));
+      container.addChild(new Text(theme.fg("dim", `Source: ${details.source} · Access: ${details.access}`), 0, 0));
       container.addChild(new Text(theme.fg("dim", `Agent file: ${details.agentFile}`), 0, 0));
       if (details.activities.length > 0) {
         container.addChild(new Spacer(1));
@@ -652,20 +686,18 @@ export default function projectSubagents(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("subagents", {
-    description: "List project-local subagents and configuration issues",
+    description: "List available specialists, access levels, and configuration issues",
     handler: async (_args, ctx) => {
       if (!ctx.isProjectTrusted()) {
-        ctx.ui.notify("Project subagents are unavailable until this project is trusted.", "warning");
+        ctx.ui.notify("Specialists are unavailable until this project is trusted.", "warning");
         return;
       }
       const discovery = discoverProjectAgents(ctx.cwd);
-      if (!discovery.agentsDir) {
-        ctx.ui.notify(`No project agents directory found. Create .pi/agents inside this project.`, "info");
-        return;
-      }
-      const lines = discovery.agents.map((agent) => `${agent.name} — ${agent.description} [${agent.tools.join(", ") || "no tools"}]`);
+      const lines = discovery.agents.map((agent) =>
+        `${agent.name} — ${agent.description} [${agent.source}, ${agent.activation}, ${agent.access}; ${agent.tools.join(", ") || "no tools"}]`,
+      );
       if (discovery.diagnostics.length > 0) lines.push(`Issues: ${discovery.diagnostics.join("; ")}`);
-      ctx.ui.notify(lines.length > 0 ? lines.join("\n") : `No valid agents in ${discovery.agentsDir}.`, discovery.diagnostics.length > 0 ? "warning" : "info");
+      ctx.ui.notify(lines.length > 0 ? lines.join("\n") : "No valid specialists are configured.", discovery.diagnostics.length > 0 ? "warning" : "info");
     },
   });
 
@@ -673,13 +705,26 @@ export default function projectSubagents(pi: ExtensionAPI): void {
     if (!ctx.isProjectTrusted()) return;
     const discovery = discoverProjectAgents(ctx.cwd);
     if (discovery.agents.length === 0) return;
+
     const prompt = event.prompt.toLowerCase();
     const explicitlyMentionsDelegation = /\b(?:sub[ -]?agents?|delegat(?:e|ion)|another agent)\b/.test(prompt)
       || discovery.agents.some((agent) => prompt.includes(agent.name.toLowerCase()));
-    if (!explicitlyMentionsDelegation) return;
-    const list = discovery.agents.map((agent) => `- ${agent.name}: ${agent.description}`).join("\n");
+    if (!explicitlyMentionsDelegation && !shouldConsiderSubagent(event.prompt)) return;
+
+    if (explicitlyMentionsDelegation && !pi.getActiveTools().includes("subagent")) {
+      pi.setActiveTools([...new Set([...pi.getActiveTools(), "subagent"])]);
+    }
+    if (!pi.getActiveTools().includes("subagent")) return;
+
+    const eligible = explicitlyMentionsDelegation
+      ? discovery.agents
+      : discovery.agents.filter((agent) => agent.activation === "propose");
+    if (eligible.length === 0) return;
+    const list = eligible.map((agent) =>
+      `- ${agent.name} [${agent.access}]: ${agent.description}`,
+    ).join("\n");
     return {
-      systemPrompt: `${event.systemPrompt}\n\nProject-local subagents available for this explicit delegation request:\n${list}\nDo not call the subagent tool for work beyond what the user requested.`,
+      systemPrompt: `${event.systemPrompt}\n\nOptional specialists available:\n${list}\n\nDelegation policy:\n- Specialists are optional, not a default workflow. Use at most one only when its expected benefit clearly exceeds coordination overhead.\n- Good uses are broad unfamiliar-code mapping, genuinely multi-source current research, or an independent review of a larger or riskier change.\n- Do not delegate straightforward questions, routine commands, simple or single-file work, work already understood, or ritual validation.\n- Give the specialist one narrow task and a plain one-sentence reason. The user will see both and must approve before it starts.\n- Treat the result as evidence, not authority. Check important claims yourself and keep responsibility for the final answer.`,
     };
   });
 }

@@ -150,14 +150,34 @@ export async function collectHarnessChecks(agentDir: string, activeTools: string
     detail: (await exists(legacyCloudflared)) ? "unused cloudflared binary is still present" : "absent; Anywhere uses Tailscale Serve",
   });
 
-  const scaffold = ["package.json", "package-lock.json", "tsconfig.json", "vitest.config.ts", "tests", ".gitignore", "scripts/responses-compaction-patch.mjs", "extensions/00-dynamic-tool-loader.ts"];
+  const scaffold = ["package.json", "package-lock.json", "tsconfig.json", "vitest.config.ts", "tests", ".gitignore", "APPEND_SYSTEM.md", "scripts/responses-compaction-patch.mjs", "extensions/00-dynamic-tool-loader.ts"];
   const missing = [] as string[];
   for (const relative of scaffold) if (!(await exists(join(agentDir, relative)))) missing.push(relative);
-  checks.push({ level: missing.length === 0 ? "pass" : "warn", label: "Harness checks", detail: missing.length === 0 ? "typecheck/test scaffold present" : `missing: ${missing.join(", ")}` });
+  checks.push({ level: missing.length === 0 ? "pass" : "warn", label: "Harness checks", detail: missing.length === 0 ? "typecheck/test scaffold and communication preferences present" : `missing: ${missing.join(", ")}` });
+
+  const specialistFiles = ["scout.md", "researcher.md", "reviewer.md"];
+  const specialistIssues: string[] = [];
+  for (const file of specialistFiles) {
+    try {
+      const source = await readFile(join(agentDir, "agents", file), "utf8");
+      const frontmatter = source.split("---")[1] ?? "";
+      const tools = frontmatter.match(/^tools:\s*(.+)$/m)?.[1] ?? "";
+      if (!/^activation:\s*propose\s*$/m.test(frontmatter)) specialistIssues.push(`${file}: not proposal-enabled`);
+      if (/(?:^|,\s*)(?:bash|edit|write)(?:\s*,|$)/i.test(tools)) specialistIssues.push(`${file}: has mutating or shell access`);
+    } catch {
+      specialistIssues.push(`${file}: missing`);
+    }
+  }
+  checks.push({
+    level: specialistIssues.length === 0 ? "pass" : "fail",
+    label: "Specialist roster",
+    detail: specialistIssues.length === 0 ? "scout, researcher, and reviewer are proposal-enabled without edit or shell access" : specialistIssues.join("; "),
+  });
+
   checks.push({
     level: activeTools.length <= 18 ? "pass" : "warn",
     label: "Active tool surface",
-    detail: `${activeTools.length} active tools${activeTools.length > 18 ? "; use /tool-loader reset to return dynamic tools to on-demand loading" : "; larger tool groups load on demand"}`, 
+    detail: `${activeTools.length} active tools${activeTools.length > 18 ? "; use /tool-loader reset to return dynamic tools to on-demand loading" : "; larger tool groups load on demand"}`,
   });
 
   return checks;

@@ -1,53 +1,59 @@
-# Project Subagents
+# Trusted Specialists
 
-A deliberately manual Pi subagent runner that works with Pi Anywhere.
+A small, approval-gated Pi specialist runner that works with Pi Anywhere.
 
-## Safety and scope
+## Default behavior
 
-- The main Pi agent starts a child only through the `subagent` tool.
-- Every run requires approval **before** the child process is spawned. If Pi Anywhere is paired, the approval appears on the dashboard; otherwise it appears in Pi's TUI.
-- Agents are loaded only from the nearest trusted `<project>/.pi/agents/` directory.
-- No global agents, sample reviewers, workflow prompts, chains, automatic reviews, or background follow-up jobs are included.
-- Only one child can run at a time.
-- Child sessions are ephemeral and extension discovery is disabled. Their available tools are explicitly declared by the project agent file; supported tools are `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`.
+- Trusted user specialists load from `~/.pi/agent/agents/`.
+- A trusted project may add explicit-use specialists in the nearest `<project>/.pi/agents/` directory.
+- Project specialists cannot replace a user specialist with the same name.
+- Pi may **propose** a user specialist only when a bounded investigation or independent review is likely to be worth the extra coordination.
+- Every run shows the reason, exact task, prompt source, access level, and tools before asking for approval.
+- Only one child can run at a time. There are no chains, swarms, background follow-ups, or automatic editing.
+- The parent Pi agent remains responsible for checking important claims and for the final answer.
 
-## Define a project agent
+## Default roster
 
-Create `<project>/.pi/agents/implementer.md`:
+| Specialist | Use when | Access |
+|---|---|---|
+| `scout` | Relevant code is spread across an unfamiliar or broad area | Read-only project files |
+| `researcher` | A decision genuinely needs several current or authoritative web sources | Network research only |
+| `reviewer` | A larger or riskier change benefits from an independent check | Read-only project files |
+
+Do not use a specialist for simple questions, routine commands, single-file work, work already understood, or ritual review.
+
+## Child isolation
+
+Each run starts an ephemeral Pi process with:
+
+- no session;
+- no normal extension discovery;
+- no skills or prompt templates;
+- only the tools declared by the specialist;
+- only approved child capabilities. Currently, the built-in `web` capability maps to the pinned `pi-web-access` extension for trusted user specialists.
+
+Supported built-in tools are `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`. The default roster intentionally has no editing or shell access.
+
+## Define an explicit project specialist
+
+Create `<project>/.pi/agents/domain-expert.md`:
 
 ```markdown
 ---
-name: implementer
-description: Implements a narrowly specified change in this project
-# Omit tools for the read-only default: read, grep, find, ls
-tools: read, grep, find, ls, bash, edit, write
-# model and thinking are optional; otherwise the main session settings are used
-# model: openai-codex/gpt-5.6-sol
-# thinking: high
+name: domain-expert
+description: Explains this project's billing rules and edge cases
+tools: read, grep, find, ls
+thinking: medium
 ---
 
-Follow this project's AGENTS.md and existing conventions.
-Implement only the delegated task. Run focused checks for files you change.
-Do not add unrelated cleanup or review work.
+Answer only the delegated billing question. Cite the relevant project files.
+Keep the result short and identify uncertainty clearly.
 ```
 
-The filename is not important, but `name`, `description`, and a non-empty instruction body are required.
+Project specialists are always explicit-request only, even if their frontmatter says `activation: propose`. They cannot request extra child extensions.
 
-## Use
-
-Ask the main Pi agent explicitly, for example:
-
-> Use the implementer subagent to add validation to the import endpoint.
-
-The main agent selects `implementer`, proposes the exact task, and waits for approval. Run `/subagents` to list valid agents and configuration issues.
+Run `/subagents` to list the current roster, access levels, and configuration issues. Use `/delegation off` to disable new runs for the session.
 
 ## Anywhere integration
 
-The addon emits a small activity protocol over Pi's extension event bus. Anywhere displays:
-
-- subagent approval and lifecycle;
-- commands run by the main or child agent;
-- edited/written paths and expandable change previews;
-- success or failure state.
-
-Raw tool output is not mirrored. Secret-shaped command values are redacted, and change previews are hidden for common sensitive files such as `.env`, credential JSON, private keys, and certificates.
+The extension sends approval and lifecycle status to Pi Anywhere. The dashboard shows commands, changed paths, and success or failure while redacting secret-shaped values and hiding previews for common sensitive files. Raw tool output is not mirrored.
