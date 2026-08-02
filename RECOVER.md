@@ -60,7 +60,55 @@ npm install
 npm run check
 ```
 
-## 4. Authenticate again
+## 4. Set up Pi Anywhere (optional)
+
+The `/Anywhere` extension is included in `extensions/anywhere/`. It provides a private phone UI for the active Pi session through Tailscale.
+
+On both the Pi computer and the phone:
+
+1. Install Tailscale.
+2. Sign in to the same tailnet.
+3. Make sure the Pi computer is connected and has a MagicDNS name.
+4. Enable MagicDNS and the tailnet's permission for Tailscale Serve/HTTPS. If approval is required, `/Anywhere` will show an approval link. Do not configure a different Serve route on this device first; Anywhere expects its Serve configuration to be empty.
+
+Check the connection from the Pi shell:
+
+```bash
+tailscale status
+tailscale status --json
+```
+
+The Pi session must be interactive TUI mode; `/Anywhere` does not start from print or RPC mode. The extension binds locally to `127.0.0.1` and uses Tailscale Serve on HTTPS port 443. It refuses to overwrite an existing Tailscale Serve configuration.
+
+The `pi-ask-user` package needs the included compatibility patch so remote questions can be answered from the phone. Apply it after installing the pinned package, only if `/Anywhere` reports that the transport hook is missing:
+
+```bash
+PI_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+cd "$PI_AGENT_DIR/git/github.com/edlsh/pi-ask-user"
+git apply --check "$PI_AGENT_DIR/extensions/anywhere/pi-ask-user-anywhere.patch"
+git apply "$PI_AGENT_DIR/extensions/anywhere/pi-ask-user-anywhere.patch"
+```
+
+If the check says the patch is already applied, skip both commands. Run `/reload` after applying it.
+
+Start and pair it:
+
+```text
+/reload
+/Anywhere
+```
+
+Open the one-time pairing link shown in Pi on a Tailscale-connected phone. The phone has the same authority as the local Pi user, so treat the paired phone as a high-privilege device. Use these commands when needed:
+
+```text
+/Anywhere status
+/Anywhere pair
+/Anywhere off
+```
+
+Read [`extensions/anywhere/README.md`](extensions/anywhere/README.md) for the complete behavior, security model, pairing details, troubleshooting, and patch notes.
+
+## 5. Authenticate again
 
 Credentials are deliberately not stored in this repository. Start Pi and authenticate again:
 
@@ -70,7 +118,7 @@ Credentials are deliberately not stored in this repository. Start Pi and authent
 
 Also recreate any provider API-key environment variables you used on the old system. Never commit `auth.json` or API keys.
 
-## 5. Restore project instructions
+## 6. Restore project instructions
 
 This repository restores the global harness, including its extensions, custom agent Markdown files, themes, settings, keybindings, scripts, patches, and tests.
 
@@ -86,7 +134,7 @@ For each project, also move its own files with the project repository:
 
 Trust projects again on the new machine with `/trust` or start Pi once with `--approve`.
 
-## 6. Optional data
+## 7. Optional data
 
 The following are intentionally excluded:
 

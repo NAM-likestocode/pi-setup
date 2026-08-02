@@ -10,6 +10,7 @@ It is intended to make the setup reproducible on another system. Start with [`RE
 - `keybindings.json` — custom keyboard shortcuts
 - `APPEND_SYSTEM.md` — additional system instructions and communication preferences
 - `extensions/` — custom Pi extensions, tools, workflows, and integrations
+  - `extensions/anywhere/` — the `/Anywhere` private phone UI and its setup/security documentation
 - `agents/` — specialist agent Markdown files used by the harness
 - `themes/` — custom terminal themes
 - `patches/` — documented local patches
@@ -17,6 +18,12 @@ It is intended to make the setup reproducible on another system. Start with [`RE
 - `tests/` — extension and harness tests
 - `HARNESS.md` and `pi-lsp.json` — harness and language-server configuration
 - `package.json` and `package-lock.json` — development dependencies for checking the harness
+
+## Pi Anywhere
+
+`/Anywhere` provides a private, authenticated phone UI for the active Pi session through Tailscale. It requires Tailscale on both the Pi computer and phone, both signed into the same tailnet, with MagicDNS and Tailscale Serve/HTTPS enabled. The extension keeps its local server on `127.0.0.1`; it does not create a public tunnel.
+
+Read [`extensions/anywhere/README.md`](extensions/anywhere/README.md) for the full setup, commands, pairing flow, `pi-ask-user` compatibility patch, security model, and troubleshooting notes. The new-system procedure is also included in [`RECOVER.md`](RECOVER.md).
 
 ## Packages
 

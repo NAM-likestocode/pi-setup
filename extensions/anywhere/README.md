@@ -2,14 +2,23 @@
 
 `/Anywhere` creates an authenticated phone UI for the **current main Pi session** over your private Tailscale network.
 
+## Prerequisites and setup
+
+- Install Tailscale on the Pi computer and the phone you will use.
+- Sign both devices into the same tailnet.
+- Enable MagicDNS and the tailnet's permission for Tailscale Serve/HTTPS. If Serve approval is still required, `/Anywhere` displays the approval link. Do not configure a different Serve route on this device first; Anywhere expects its Serve configuration to be empty.
+- Make sure Tailscale is connected before starting Pi. `tailscale status` should work, and the device must have a MagicDNS name.
+- Install the pinned `pi-ask-user` package from `settings.json`. This setup includes a compatibility patch at [`pi-ask-user-anywhere.patch`](./pi-ask-user-anywhere.patch). Apply it only if `/Anywhere` reports that the Anywhere transport hook is missing; see the compatibility section below.
+
+Anywhere starts its local HTTP server on an ephemeral `127.0.0.1` port and asks Tailscale to expose it privately as HTTPS on port 443. It refuses to overwrite an existing Tailscale Serve configuration, so resolve or remove another Serve configuration first if startup reports that one already exists.
+
 ## Use
 
-1. Enable **Tailscale Serve** for your tailnet (required once; `/Anywhere` displays an approval link if it is disabled).
-2. Run `/reload` after installing/updating the extension.
-3. In an interactive Pi session, run `/Anywhere`.
-4. Open the one-time pairing link shown above the editor on your Tailscale-connected phone.
-5. Use the page to chat with Pi or answer its `ask_user` questions.
-6. Run `/Anywhere off` to revoke the device and remove the Tailscale Serve route.
+1. Run `/reload` after installing or updating the extension and after applying the compatibility patch.
+2. In an interactive Pi session, run `/Anywhere`.
+3. Open the one-time pairing link shown above the editor on your Tailscale-connected phone.
+4. Use the page to chat with Pi or answer its `ask_user` questions.
+5. Run `/Anywhere off` to revoke the device and remove the Tailscale Serve route.
 
 Commands:
 
@@ -49,10 +58,17 @@ Do not forward a pairing link, leave the paired browser unlocked, or leave Anywh
 
 ## `pi-ask-user` compatibility
 
-This installation includes a small cooperative change in the installed `pi-ask-user` package. The exact patch is saved as [`pi-ask-user-anywhere.patch`](./pi-ask-user-anywhere.patch). It is designed for `pi-ask-user` v0.13.0. Package updates can overwrite the hook; if `/Anywhere` reports that the hook is missing, reapply the patch from the `pi-ask-user` package directory and reload Pi:
+This installation includes a small cooperative change in the installed `pi-ask-user` package. The exact patch is saved as [`pi-ask-user-anywhere.patch`](./pi-ask-user-anywhere.patch). It is designed for `pi-ask-user` v0.13.0. Package updates can overwrite the hook; if `/Anywhere` reports that the hook is missing, reapply the patch from the installed `pi-ask-user` package directory and reload Pi.
 
-```powershell
-git apply C:\Users\Fool\.pi\agent\extensions\anywhere\pi-ask-user-anywhere.patch
+From Git Bash, after replacing `PI_AGENT_DIR` if you use a custom `PI_CODING_AGENT_DIR`:
+
+```bash
+PI_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+cd "$PI_AGENT_DIR/git/github.com/edlsh/pi-ask-user"
+git apply --check "$PI_AGENT_DIR/extensions/anywhere/pi-ask-user-anywhere.patch"
+git apply "$PI_AGENT_DIR/extensions/anywhere/pi-ask-user-anywhere.patch"
 ```
+
+Only apply it when the hook is missing. If `git apply --check` says the patch is already applied, skip both commands and run `/reload`.
 
 The regular terminal `ask_user` UI remains unchanged whenever Anywhere is off.
