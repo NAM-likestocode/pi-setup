@@ -1,14 +1,14 @@
 # Credentials and machine/session state
-auth.json
-trust.json
-sessions/
-run-history.jsonl
-mcp-cache.json
-models-store.json
-models-store.json.*
+/auth.json
+/trust.json
+/sessions/
+/run-history.jsonl
+/mcp-cache.json
+/models-store.json
+/models-store.json.*
 *.bak*
-AGENTS.md
-state/
+/AGENTS.md
+/state/
 .env
 .env.*
 !.env.example
@@ -22,8 +22,8 @@ google-services.json
 GoogleService-Info.plist
 
 # Pi-managed third-party package stores
-npm/
-git/
+/npm/
+/git/
 
 # Harness dependencies and generated output
 node_modules/
@@ -58,5 +58,5 @@ apps/anywhere-companion/state/
 apps/anywhere-companion/*.log
 
 # Local executables and retired tunnel artifacts
-bin/
+/bin/
 extensions/anywhere/bin/
