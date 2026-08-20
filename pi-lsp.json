@@ -1,6 +1,6 @@
 {
   "biome": {
-    "command": ["biome.cmd", "lsp-proxy"],
+    "command": ["biome", "lsp-proxy"],
     "extensions": [
       ".astro",
       ".cjs",
