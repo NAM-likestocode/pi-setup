@@ -95,16 +95,24 @@ export async function collectHarnessChecks(agentDir: string, activeTools: string
 
   try {
     const recorder = await readFile(join(agentDir, "npm", "node_modules", "pi-voice-stt", "src", "audio", "ffmpeg-recorder.ts"), "utf8");
-    const graceful = recorder.includes(VOICE_STT_WINDOWS_MARKER)
-      && recorder.includes('input.write("q")')
-      && !recorder.includes('"-nostdin"');
-    checks.push({
-      level: graceful ? "pass" : "fail",
-      label: "Pi Voice STT Windows capture",
-      detail: graceful ? "FFmpeg exits through its native q command and finalizes WAV recordings" : "managed graceful-stop fix is missing; run npm run patch:voice",
-    });
+    if (process.platform !== "win32") {
+      checks.push({
+        level: "pass",
+        label: "Pi Voice STT capture",
+        detail: "package source is readable; the managed FFmpeg graceful-stop patch is Windows-only",
+      });
+    } else {
+      const graceful = recorder.includes(VOICE_STT_WINDOWS_MARKER)
+        && recorder.includes('input.write("q")')
+        && !recorder.includes('"-nostdin"');
+      checks.push({
+        level: graceful ? "pass" : "fail",
+        label: "Pi Voice STT Windows capture",
+        detail: graceful ? "FFmpeg exits through its native q command and finalizes WAV recordings" : "managed graceful-stop fix is missing; run npm run patch:voice",
+      });
+    }
   } catch (error) {
-    checks.push({ level: "fail", label: "Pi Voice STT Windows capture", detail: error instanceof Error ? error.message : String(error) });
+    checks.push({ level: "fail", label: "Pi Voice STT capture", detail: error instanceof Error ? error.message : String(error) });
   }
 
   const askUserDir = join(agentDir, "git", "github.com", EXPECTED_ASK_USER_OWNER, "pi-ask-user");

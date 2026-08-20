@@ -1,11 +1,12 @@
 import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createFfmpegRecorder } from "../npm/node_modules/pi-voice-stt/src/audio/ffmpeg-recorder.ts";
 import { patchFfmpegRecorder } from "../scripts/pi-voice-stt-windows-patch.mjs";
 
-const agentDir = "C:/Users/Fool/.pi/agent";
+const agentDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const originalPath = join(
 	agentDir,
 	"patches",

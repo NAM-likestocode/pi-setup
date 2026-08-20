@@ -1,21 +1,11 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { patchCodexProvider, patchResponsesShared } from "../scripts/responses-compaction-patch.mjs";
 
-const piAiApi = join(
-  process.env.LOCALAPPDATA || "",
-  "pi-node",
-  "current",
-  "node_modules",
-  "@earendil-works",
-  "pi-coding-agent",
-  "node_modules",
-  "@earendil-works",
-  "pi-ai",
-  "dist",
-  "api",
-);
+const harnessRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const piAiApi = join(harnessRoot, "node_modules", "@earendil-works", "pi-ai", "dist", "api");
 
 describe("Responses server-compaction patch", () => {
   it("adds a 200K server threshold and unsupported-parameter fallback idempotently", async () => {

@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { runRestrictedCheck } from "../extensions/auto-workaround-fixer/restricted-check.ts";
 import {
@@ -17,6 +18,8 @@ import {
   validateAutomaticChanges,
 } from "../extensions/auto-workaround-fixer/workspace.ts";
 
+const harnessRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const codingAgentRoot = join(harnessRoot, "node_modules", "@earendil-works", "pi-coding-agent");
 const temporaryDirectories: string[] = [];
 
 async function tempDirectory(): Promise<string> {
@@ -96,8 +99,8 @@ describe.skipIf(process.env.PI_RESTRICTED_HARNESS_CHECK === "1")("automatic work
     const result = await runRestrictedCheck({
       action: "typecheck",
       workspace,
-      agentDir: "C:/Users/Fool/.pi/agent",
-      codingAgentRoot: "C:/Users/Fool/AppData/Local/pi-node/current/node_modules/@earendil-works/pi-coding-agent",
+      agentDir: harnessRoot,
+      codingAgentRoot,
       tempRoot: root,
     });
 
@@ -132,8 +135,8 @@ describe.skipIf(process.env.PI_RESTRICTED_HARNESS_CHECK === "1")("automatic work
     const result = await runRestrictedCheck({
       action: "test",
       workspace,
-      agentDir: "C:/Users/Fool/.pi/agent",
-      codingAgentRoot: "C:/Users/Fool/AppData/Local/pi-node/current/node_modules/@earendil-works/pi-coding-agent",
+      agentDir: harnessRoot,
+      codingAgentRoot,
       tempRoot: root,
       testFiles: ["tests/restricted.test.ts"],
     });

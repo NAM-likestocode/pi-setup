@@ -1,5 +1,9 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { collectHarnessChecks, EXPECTED_PACKAGE_SPECS, isPinnedPackageSpec } from "../extensions/_shared/harness-health.ts";
+
+const harnessRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("harness package pins", () => {
   it.each(EXPECTED_PACKAGE_SPECS)("recognizes reviewed pin: %s", (spec) => {
@@ -20,8 +24,7 @@ describe("harness package pins", () => {
   });
 
   it("passes all fail-level checks against the live harness", async () => {
-    const harnessRoot = process.env.PI_HARNESS_TEST_ROOT ?? "C:/Users/Fool/.pi/agent";
-    const checks = await collectHarnessChecks(harnessRoot, ["read", "bash", "search_tools"]);
+    const checks = await collectHarnessChecks(process.env.PI_HARNESS_TEST_ROOT ?? harnessRoot, ["read", "bash", "search_tools"]);
     expect(checks.filter((check) => check.level === "fail")).toEqual([]);
   });
 });
