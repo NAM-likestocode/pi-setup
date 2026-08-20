@@ -119,6 +119,7 @@ async function writeTrustedVitestConfig(options: RestrictedCheckOptions, checkTe
   const config = {
     root: options.workspace,
     resolve: { alias: aliases, preserveSymlinks: true },
+    server: { host: "127.0.0.1" },
     test: {
       include: ["tests/**/*.test.ts"],
       exclude: ["node_modules/**", "npm/**", "git/**", "sessions/**", ...PROCESS_REQUIRED_TESTS],
