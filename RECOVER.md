@@ -1,150 +1,177 @@
 # Recover this Pi setup on a new system
 
-This repository contains the tracked, safe-to-share part of the Pi setup. It intentionally does **not** contain credentials, conversation sessions, caches, installed package stores, or `node_modules`.
+This repository contains the tracked, safe-to-share Pi harness, Pimo's Anywhere protocol, Tauri companion source, and Expo mobile source. Credentials, sessions, package stores, signing keys, and generated builds are intentionally excluded.
 
 ## 1. Install prerequisites
 
 Install:
 
-- Node.js and npm
+- Node.js 22 or newer and npm
 - Git
-- Bash on Windows (Git Bash is sufficient)
-- Pi itself, using the normal Pi installation instructions
+- Pi itself
+- Rust/Cargo and platform build tools for the Tauri companion
+- JDK 17 plus the Android SDK/NDK for local Android release validation
+- Tailscale on the computer and phone
+- An Apple Developer account for durable iOS internal builds
 
-Do not copy the old Pi installation directory. Install Pi fresh on the new system.
+Do not copy the old Pi installation directory. Install Pi fresh.
 
-## 2. Clone this repository into Pi's global configuration directory
-
-Pi's default global configuration directory is `~/.pi/agent`.
-
-In Git Bash or another bash shell:
+## 2. Clone the harness
 
 ```bash
-# If Pi has already created this directory, move it aside first.
 if [ -d "$HOME/.pi/agent" ]; then
   mv "$HOME/.pi/agent" "$HOME/.pi/agent.before-pi-setup"
 fi
 
 git clone https://github.com/NAM-likestocode/pi-setup.git "$HOME/.pi/agent"
 cd "$HOME/.pi/agent"
+npm install
+npm run planner:build
 ```
 
-On Windows this is normally:
+On Windows the default path is `C:\Users\<your-user>\.pi\agent`. If `PI_CODING_AGENT_DIR` is set, use that directory instead.
+
+## 3. Restore Pi packages
+
+The package list in `settings.json` is the source of truth. The Anywhere question transport is pinned to this maintained fork and full commit:
 
 ```text
-C:\Users\<your-user>\.pi\agent
+git:github.com/NAM-likestocode/pi-ask-user@b01089e7f67318e7d4fc3a44ad043c6d16c096e5
 ```
 
-If `PI_CODING_AGENT_DIR` is set, use that directory instead.
+Install/update packages with Pi's normal package command or let Pi restore the pinned list. Do not apply the removed `pi-ask-user-anywhere.patch`.
 
-## 3. Restore the installed Pi packages
-
-The package stores are intentionally not in Git. Install the pinned packages listed in `settings.json`:
+On Windows, restore the version-locked `pi-voice-stt` WAV-finalization fix after package installation:
 
 ```bash
-pi install git:github.com/MasuRii/pi-image-tools@b8977bbb4f416fd63db7c7c602db6dfe7b17f62c
-pi install git:github.com/edlsh/pi-ask-user@1ad2adf7010c4ac5068668b6999bc1eb98a864a7
-pi install npm:context-mode@1.0.169
-pi install npm:pi-web-access@0.15.0
-pi install npm:pi-mcp-adapter@2.15.0
-pi install npm:@narumitw/pi-lsp@0.39.0
-pi install npm:@braintrust/pi-extension@0.10.0
+npm run patch:voice
 ```
 
-If the package list in `settings.json` has changed, use that list as the source of truth.
+Fully exit and reopen Pi after applying it; an in-process `/reload` can retain the old nested recorder module.
 
-To restore the harness development dependencies and run its checks:
+For no-cost local dictation, install `whisper-local==0.16.1`, select the model recorded in `HARNESS.md`, and launch `whisper-local --serve --serve-host 127.0.0.1 --serve-port 7777` at login. Adjust the DirectShow microphone name in `stt.json` if the restored computer uses another device.
+
+Authenticate again with `/login` and recreate provider environment variables. Never commit `auth.json` or API keys.
+
+A root-level `npm audit` currently reports the documented Expo/React Native mobile build-chain advisories. Read [`docs/dependency-audit.md`](docs/dependency-audit.md) and do not run `npm audit fix --force`; the offered fix is a breaking framework migration.
+
+## 4. Install Pimo Companion
+
+From `apps/anywhere-companion/`:
 
 ```bash
 npm install
-npm run check
+npx tauri build
 ```
 
-## 4. Set up Pi Anywhere (optional)
+Install the resulting private package for the current desktop platform:
 
-The `/Anywhere` extension is included in `extensions/anywhere/`. It provides a private phone UI for the active Pi session through Tailscale.
+- Windows: signed or unsigned internal NSIS installer
+- macOS: internal DMG, signed/notarized when credentials are available
+- Linux: AppImage or deb package with a tray/AppIndicator-capable desktop
 
-On both the Pi computer and the phone:
+Start Pimo Companion once. It stays in the system tray, starts its loopback servers, writes a protected rendezvous file, and tries to enable Tailscale Serve only when the Serve configuration is empty.
+
+Enable autostart from the tray menu if desired. Closing the window hides it; use **Quit Pimo** to stop it. Quitting does not revoke pairing.
+
+## 5. Configure Tailscale
+
+On both the computer and phone:
 
 1. Install Tailscale.
 2. Sign in to the same tailnet.
-3. Make sure the Pi computer is connected and has a MagicDNS name.
-4. Enable MagicDNS and the tailnet's permission for Tailscale Serve/HTTPS. If approval is required, `/Anywhere` will show an approval link. Do not configure a different Serve route on this device first; Anywhere expects its Serve configuration to be empty.
+3. Enable MagicDNS.
+4. Allow Tailscale Serve/HTTPS for the tailnet.
+5. Ensure no unrelated Serve handler occupies HTTPS port 443 on the computer.
 
-Check the connection from the Pi shell:
+Verify on the computer:
 
 ```bash
 tailscale status
 tailscale status --json
 ```
 
-The Pi session must be interactive TUI mode; `/Anywhere` does not start from print or RPC mode. The extension binds locally to `127.0.0.1` and uses Tailscale Serve on HTTPS port 443. It refuses to overwrite an existing Tailscale Serve configuration.
+Pimo never enables Funnel or a public relay. If another Serve configuration exists, resolve it before enabling the companion; it will not overwrite that service.
 
-The `pi-ask-user` package needs the included compatibility patch so remote questions can be answered from the phone. Apply it after installing the pinned package, only if `/Anywhere` reports that the transport hook is missing:
+## 6. Build and install the private mobile app
+
+Set a real private EAS project ID in `apps/anywhere-mobile/app.json`, then run:
 
 ```bash
-PI_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
-cd "$PI_AGENT_DIR/git/github.com/edlsh/pi-ask-user"
-git apply --check "$PI_AGENT_DIR/extensions/anywhere/pi-ask-user-anywhere.patch"
-git apply "$PI_AGENT_DIR/extensions/anywhere/pi-ask-user-anywhere.patch"
+cd apps/anywhere-mobile
+npm install
+npx eas build --profile android-internal --platform android
+npx eas build --profile ios-internal --platform ios
 ```
 
-If the check says the patch is already applied, skip both commands. Run `/reload` after applying it.
+Install the Android APK or iOS internal/TestFlight build. The app stores the paired device credential only in Android Keystore/iOS Keychain through `expo-secure-store`.
 
-Start and pair it:
+## 7. Pair and use Pimo
+
+Start an interactive Pi TUI session. The Pi extension automatically registers with Pimo Companion. Then run:
 
 ```text
 /reload
-/Anywhere
+/Pimo
 ```
 
-Open the one-time pairing link shown in Pi on a Tailscale-connected phone. The phone has the same authority as the local Pi user, so treat the paired phone as a high-privilege device. Use these commands when needed:
+Open the pairing QR in Pimo Companion and scan it from the Pimo mobile app. Pairing is computer-wide rather than session-specific and survives restarts until explicitly revoked.
+
+Commands:
+
+- `/Pimo` or `/Pimo start` — connect or reconnect this Pi session.
+- `/Pimo status` — show this Pi instance's connection state.
+- `/Pimo pair` — direct you to the one-time QR in Pimo Companion.
+- `/Pimo off` — revoke the phone, disable external access, and remove only the Serve route owned by this companion.
+
+`/Anywhere` remains a legacy alias for compatibility.
+
+The app lists all active interactive TUI Pi sessions, loads bounded current-branch user/assistant history, shows redacted live activity, sends messages, and answers questions or specialist approvals. The first valid terminal or app answer wins.
+
+## 8. Use the visual planner
+
+The browser assets were built in step 2. Start an interactive Pi session in any project, then run:
 
 ```text
-/Anywhere status
-/Anywhere pair
-/Anywhere off
+/reload
+/canvas
 ```
 
-Read [`extensions/anywhere/README.md`](extensions/anywhere/README.md) for the complete behavior, security model, pairing details, troubleshooting, and patch notes.
+The board is saved in that project under `.pi/visual-planner/`. Pi can stage changes, but they remain unapplied until accepted in the browser. Use `/canvas status` to see the board path and `/canvas off` to stop its loopback server.
 
-## 5. Authenticate again
+## 9. Validate the installation
 
-Credentials are deliberately not stored in this repository. Start Pi and authenticate again:
-
-```text
-/login
+```bash
+cd ~/.pi/agent
+npm run typecheck
+npm test
+npm run planner:build
+npm run companion:build
+npm run mobile:typecheck
 ```
 
-Also recreate any provider API-key environment variables you used on the old system. Never commit `auth.json` or API keys.
+Rust checks require Cargo and are run from the companion directory:
 
-## 6. Restore project instructions
+```bash
+cd apps/anywhere-companion/src-tauri
+cargo test
+cargo check
+```
 
-This repository restores the global harness, including its extensions, custom agent Markdown files, themes, settings, keybindings, scripts, patches, and tests.
+Run `/reload` after changing the harness extensions or installing a new pinned Pi package.
 
-For each project, also move its own files with the project repository:
+## 10. Project instructions and optional data
+
+Project-specific files remain with each project repository:
 
 - `AGENTS.md` or `CLAUDE.md`
 - `.pi/settings.json`
-- `.pi/extensions/`
-- `.pi/skills/`
-- `.pi/prompts/`
-- `.pi/themes/`
+- `.pi/extensions/`, `.pi/skills/`, `.pi/prompts/`, `.pi/themes/`
 - `.agents/skills/`
 
-Trust projects again on the new machine with `/trust` or start Pi once with `--approve`.
+Do not copy these machine-specific or sensitive paths into Git:
 
-## 7. Optional data
-
-The following are intentionally excluded:
-
-- `auth.json` — credentials and OAuth tokens
-- `sessions/` — conversation history, tied to the original project paths
-- `trust.json` — machine-specific absolute paths
-- `npm/`, `git/`, and `node_modules/` — reinstallable dependencies
-- `models-store.json`, `mcp-cache.json`, and run history — generated caches/state
-- `~/.pi/context-mode/` — separate context-mode indexes and session data
-
-If old conversations are needed, copy the session files separately and open one with `pi --session <path>`. If project paths changed, `/resume` may not list them automatically.
-
-After restoring everything, start Pi and run `/reload` so it reloads the copied settings, extensions, agents, themes, and packages.
+- `auth.json`, provider keys, and push/signing credentials
+- `sessions/`, `trust.json`, model caches, MCP state, and run history
+- `npm/`, `git/`, and `node_modules/`
+- Expo/Tauri generated output and installers

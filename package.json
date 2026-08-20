@@ -3,16 +3,33 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "protocol:test": "vitest run tests/anywhere-protocol.test.ts",
+    "companion:build": "npm run build -w @pi-anywhere/companion",
+    "planner:build": "npm run build -w @fool-pi/visual-planner",
+    "mobile:typecheck": "npm run typecheck -w @pi-anywhere/mobile",
     "patch:responses": "node scripts/responses-compaction-patch.mjs --apply",
     "patch:check": "node scripts/responses-compaction-patch.mjs --check",
     "patch:revert": "node scripts/responses-compaction-patch.mjs --revert",
-    "check": "npm run typecheck && npm test && npm run patch:check"
+    "patch:voice": "node scripts/pi-voice-stt-windows-patch.mjs --apply",
+    "patch:voice-check": "node scripts/pi-voice-stt-windows-patch.mjs --check",
+    "patch:voice-revert": "node scripts/pi-voice-stt-windows-patch.mjs --revert",
+    "check": "npm run typecheck && npm test && npm run planner:build && npm run patch:check"
+  },
+  "dependencies": {
+    "@types/qrcode": "1.5.5",
+    "qrcode": "1.5.4",
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "@types/node": "24.12.4",
+    "@types/ws": "8.5.13",
     "typescript": "5.9.3",
     "vitest": "4.1.9"
   }

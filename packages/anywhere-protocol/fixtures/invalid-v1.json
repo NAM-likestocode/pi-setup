@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "hostId": "old-host",
+  "baseUrl": "https://old-host.example.ts.net",
+  "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+}

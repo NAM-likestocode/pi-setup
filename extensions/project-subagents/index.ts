@@ -22,9 +22,10 @@ import {
 import { shouldConsiderSubagent } from "../00-dynamic-tool-loader.ts";
 import { discoverProjectAgents, type ProjectAgent } from "./agents.ts";
 
-const ASK_PROTOCOL_VERSION = 1;
-const ASK_REQUEST_CHANNEL = "anywhere:ask:v1:request";
-const ASK_CANCEL_CHANNEL = "anywhere:ask:v1:cancel";
+const PROMPT_PROTOCOL_VERSION = 2;
+const PROMPT_OPEN_CHANNEL = "anywhere:prompt:v2:open";
+const PROMPT_CLOSE_CHANNEL = "anywhere:prompt:v2:close";
+const PROMPT_PROBE_CHANNEL = "anywhere:prompt:v2:probe";
 const MAX_TASK_CHARS = 12_000;
 const MAX_OUTPUT_BYTES = 50 * 1024;
 const MAX_STDERR_CHARS = 12_000;
@@ -182,6 +183,19 @@ function lifecycleActivity(
   };
 }
 
+function remotePromptAvailable(pi: ExtensionAPI): boolean {
+  let available = false;
+  pi.events.emit(PROMPT_PROBE_CHANNEL, {
+    version: PROMPT_PROTOCOL_VERSION,
+    report: (capability: unknown) => {
+      if (!capability || typeof capability !== "object") return;
+      const record = capability as { version?: unknown; remotePrompt?: unknown };
+      if (record.version === PROMPT_PROTOCOL_VERSION && record.remotePrompt === true) available = true;
+    },
+  });
+  return available;
+}
+
 function requestRemoteApproval(
   pi: ExtensionAPI,
   runId: string,
@@ -190,8 +204,7 @@ function requestRemoteApproval(
   task: string,
   signal: AbortSignal | undefined,
 ): Promise<boolean> | undefined {
-  if (signal?.aborted) return Promise.resolve(false);
-  let claimed = false;
+  if (signal?.aborted || !remotePromptAvailable(pi)) return signal?.aborted ? Promise.resolve(false) : undefined;
   let settled = false;
   let resolveAnswer!: (approved: boolean) => void;
   const answer = new Promise<boolean>((resolve) => { resolveAnswer = resolve; });
@@ -203,14 +216,15 @@ function requestRemoteApproval(
     return true;
   };
   const onAbort = () => {
-    pi.events.emit(ASK_CANCEL_CHANNEL, { version: ASK_PROTOCOL_VERSION, id: runId });
+    pi.events.emit(PROMPT_CLOSE_CHANNEL, { version: PROMPT_PROTOCOL_VERSION, id: runId, reason: "aborted" });
     finish(false);
   };
   signal?.addEventListener("abort", onAbort, { once: true });
 
-  pi.events.emit(ASK_REQUEST_CHANNEL, {
-    version: ASK_PROTOCOL_VERSION,
+  pi.events.emit(PROMPT_OPEN_CHANNEL, {
+    version: PROMPT_PROTOCOL_VERSION,
     id: runId,
+    kind: "specialist",
     question: `Run specialist “${agent.name}”?`,
     context: [
       agent.description,
@@ -232,23 +246,13 @@ function requestRemoteApproval(
     allowMultiple: false,
     allowFreeform: false,
     allowComment: false,
+    openedAt: Date.now(),
     signal,
-    claim: () => {
-      if (claimed || settled) return false;
-      claimed = true;
-      return true;
-    },
     respond: (value: RemoteAnswer | null) => {
       const approved = value?.kind === "selection" && value.selections?.includes("Run subagent") === true;
       return finish(approved);
     },
   });
-
-  if (!claimed) {
-    signal?.removeEventListener("abort", onAbort);
-    settled = true;
-    return undefined;
-  }
   return answer;
 }
 
@@ -261,26 +265,38 @@ async function confirmRun(
   task: string,
   signal: AbortSignal | undefined,
 ): Promise<boolean> {
-  const remote = requestRemoteApproval(pi, runId, agent, reason, task, signal);
-  if (remote) return await remote;
-  if (!ctx.hasUI) return false;
-  return await ctx.ui.confirm(
-    `Run specialist “${agent.name}”?`,
-    [
-      agent.description,
-      `Why Pi recommends it: ${reason}`,
-      `Source: ${agent.source} — ${agent.filePath}`,
-      `Access: ${agent.access}`,
-      `Tools: ${agent.tools.join(", ") || "none"}`,
-      `Model: ${agent.model}`,
-      `Thinking: ${agent.thinking}`,
-      "",
-      `Exact task:\n${task}`,
-      "",
-      "No child process has started. The main Pi agent remains responsible for checking the result.",
-    ].join("\n"),
-    signal ? { signal } : undefined,
-  );
+  const localAbort = new AbortController();
+  const onAbort = () => localAbort.abort();
+  signal?.addEventListener("abort", onAbort, { once: true });
+  const promptMessage = [
+    agent.description,
+    `Why Pi recommends it: ${reason}`,
+    `Source: ${agent.source} — ${agent.filePath}`,
+    `Access: ${agent.access}`,
+    `Tools: ${agent.tools.join(", ") || "none"}`,
+    `Model: ${agent.model}`,
+    `Thinking: ${agent.thinking}`,
+    "",
+    `Exact task:\n${task}`,
+    "",
+    "No child process has started. The main Pi agent remains responsible for checking the result.",
+  ].join("\n");
+  const remote = requestRemoteApproval(pi, runId, agent, reason, task, localAbort.signal);
+  const local = ctx.hasUI
+    ? ctx.ui.confirm(`Run specialist “${agent.name}”?`, promptMessage, { signal: localAbort.signal })
+    : Promise.resolve(false);
+  if (!remote) {
+    const result = await local;
+    signal?.removeEventListener("abort", onAbort);
+    return result;
+  }
+  const winner = await Promise.race([
+    remote.then((value) => ({ source: "remote" as const, value })),
+    local.then((value) => ({ source: "local" as const, value })),
+  ]);
+  localAbort.abort();
+  signal?.removeEventListener("abort", onAbort);
+  return winner.value;
 }
 
 function summaryFromActivity(activity: DashboardActivity): ActivitySummary {
@@ -728,7 +744,7 @@ export default function projectSubagents(pi: ExtensionAPI): void {
       `- ${agent.name} [${agent.access}]: ${agent.description}`,
     ).join("\n");
     return {
-      systemPrompt: `${event.systemPrompt}\n\nOptional specialists available:\n${list}\n\nDelegation policy:\n- Specialists are optional, not a default workflow. Use at most one only when its expected benefit clearly exceeds coordination overhead.\n- Good uses are broad unfamiliar-code mapping, genuinely multi-source current research, an independent review of a larger or riskier change, or finding a supported root-cause fix before Pi would otherwise add a workaround.\n- Whenever Pi would otherwise introduce a workaround, use the workaround-fixer under this approval gate first; the parent agent then verifies and implements the clean fix.\n- Do not delegate straightforward questions, routine commands, simple or single-file work, work already understood, or ritual validation.\n- Give the specialist one narrow task and a plain one-sentence reason. The user will see both and must approve before it starts.\n- Treat the result as evidence, not authority. Check important claims yourself and keep responsibility for the final answer.`,
+      systemPrompt: `${event.systemPrompt}\n\nOptional specialists available:\n${list}\n\nDelegation policy:\n- Specialists are optional, not a default workflow. Use at most one only when its expected benefit clearly exceeds coordination overhead.\n- Good uses are broad unfamiliar-code mapping, genuinely multi-source current research, or an independent review of a larger or riskier change.\n- Do not delegate straightforward questions, routine commands, simple or single-file work, work already understood, or ritual validation.\n- The separate fix_pi_workaround tool handles only recurring operational detours forced on the main Pi agent; do not use a specialist for project-code workarounds.\n- Give the specialist one narrow task and a plain one-sentence reason. The user will see both and must approve before it starts.\n- Treat the result as evidence, not authority. Check important claims yourself and keep responsibility for the final answer.`,
     };
   });
 }

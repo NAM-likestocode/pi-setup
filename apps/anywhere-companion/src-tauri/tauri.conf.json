@@ -1,0 +1,47 @@
+{
+	"$schema": "https://schema.tauri.app/config/2",
+	"productName": "Pimo Companion",
+	"mainBinaryName": "pi-anywhere-companion",
+	"version": "0.1.7",
+	"identifier": "com.namlikestocode.pi-anywhere",
+	"build": {
+		"beforeDevCommand": "npm run dev",
+		"devUrl": "http://127.0.0.1:1420",
+		"beforeBuildCommand": "npm run build",
+		"frontendDist": "../dist"
+	},
+	"app": {
+		"windows": [
+			{
+				"label": "main",
+				"title": "",
+				"decorations": false,
+				"width": 480,
+				"height": 680,
+				"minWidth": 360,
+				"minHeight": 420,
+				"visible": true,
+				"resizable": false,
+				"minimizable": true,
+				"center": true
+			}
+		],
+		"security": {
+			"csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:1420"
+		}
+	},
+	"bundle": {
+		"active": true,
+		"targets": ["nsis", "dmg", "appimage", "deb"],
+		"createUpdaterArtifacts": false,
+		"shortDescription": "Pimo desktop companion",
+		"longDescription": "Connect the Pimo mobile app to interactive Pi sessions over your private Tailscale network.",
+		"windows": {
+			"nsis": {
+				"installerHooks": "./nsis/pimo-migration.nsh",
+				"installerIcon": "icons/icon.ico",
+				"uninstallerIcon": "icons/icon.ico"
+			}
+		}
+	}
+}

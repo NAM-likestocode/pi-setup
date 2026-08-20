@@ -145,6 +145,10 @@ function loadAgentsFromDir(
     }
 
     const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(content);
+    const managedAutomatically = frontmatter.automatic === true
+      || stringValue(frontmatter.automatic)?.toLowerCase() === "true";
+    if (source === "user" && managedAutomatically && stringValue(frontmatter.scope) === "pi-harness") continue;
+
     const name = stringValue(frontmatter.name) ?? parse(entry.name).name;
     const description = stringValue(frontmatter.description);
     const requestedModel = stringValue(frontmatter.model);

@@ -1,0 +1,15 @@
+{
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "android-internal": {
+      "distribution": "internal",
+      "android": { "buildType": "apk" }
+    },
+    "ios-internal": {
+      "distribution": "internal"
+    }
+  }
+}

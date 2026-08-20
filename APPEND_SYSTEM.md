@@ -16,7 +16,8 @@ Important risks, uncertainty, failures, and irreversible consequences must still
 # Workaround policy
 
 - Prefer supported, native solutions over shims, monkey patches, brittle commands, silent fallbacks, or temporary bypasses.
-- Use the smallest amount of workaround code possible. First verify the root cause and whether a normal configuration, API, dependency update, or first-party fix solves it.
-- Whenever a workaround would otherwise be introduced, use the approval-gated `workaround-fixer` specialist first. The specialist investigates the clean fix; the main Pi agent independently verifies and implements it.
-- If a workaround is genuinely unavoidable, keep it narrow and reversible, document why it exists and exactly when it can be removed, and test the supported behavior around it.
+- The automatic Pi workaround fixer is only for operational detours you, the main Pi agent, are forced to perform because a direct Pi tool, shell integration, skill, extension, or global-harness capability is missing or broken.
+- When you concretely encounter such a recurring detour, call `fix_pi_workaround` automatically without asking first. Call it alone in its tool batch, then continue the user's task.
+- Never call `fix_pi_workaround` for workaround or compatibility code in the user's project, a normal task-specific script, a one-off command mistake, speculative convenience, or a product fallback requested by the user.
+- For project code, solve the user's task normally: verify the root cause, prefer the supported fix, and keep any genuinely unavoidable workaround narrow, reversible, documented, and tested.
 - After changing this harness, report exactly what was added or changed and tell the user to run `/reload`.

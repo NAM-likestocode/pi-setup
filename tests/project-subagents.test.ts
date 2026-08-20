@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { discoverProjectAgents } from "../extensions/project-subagents/agents.ts";
 
 const temporaryDirectories: string[] = [];
@@ -37,6 +37,10 @@ describe("trusted specialist discovery", () => {
     writeFileSync(join(userAgentsDir, "researcher.md"), agentFile(
       "name: researcher\ndescription: Researches the web\ntools: web_search, source_check\nactivation: propose\ncapabilities: web\nmodel: openai-codex/gpt-5.6-sol\nthinking: xhigh",
       "Use strong sources.",
+    ));
+    writeFileSync(join(userAgentsDir, "workaround-fixer.md"), agentFile(
+      "name: workaround-fixer\ndescription: Automatically repairs Pi harness friction\ntools: read, edit, write\nactivation: explicit\nautomatic: true\nscope: pi-harness",
+      "Operate only through the dedicated automatic runner.",
     ));
 
     const discovery = discoverProjectAgents(project, {

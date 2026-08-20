@@ -2,12 +2,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 
 const DOUBLE_ESCAPE_WINDOW_MS = 750;
-const HARD_STOP_EVENT = "context-mode:hard-stop";
 
 /**
  * First Escape keeps Pi's normal cancel behavior. A second Escape while that
- * cancellation is armed consumes the key and tears down the context-mode MCP
- * process tree, including any stuck ctx_execute descendant.
+ * cancellation is armed consumes the key and requests a hard stop.
  */
 export default function hardStop(pi: ExtensionAPI): void {
 	let unsubscribe: (() => void) | undefined;
@@ -30,13 +28,12 @@ export default function hardStop(pi: ExtensionAPI): void {
 			if (hardStopUntil !== 0 && now <= hardStopUntil) {
 				hardStopUntil = 0;
 				ctx.abort();
-				pi.events.emit(HARD_STOP_EVENT, { source: "double-escape", timestamp: now });
 				ctx.ui.notify("Hard stop requested.", "warning");
 				return { consume: true };
 			}
 
 			// Let the first Escape reach Pi normally, but always arm the second.
-			// A ctx_execute child can outlive Pi's visible agent state, so using
+			// A child process can outlive Pi's visible agent state, so using
 			// isIdle() here would leave precisely the stuck case unkillable.
 			hardStopUntil = now + DOUBLE_ESCAPE_WINDOW_MS;
 			return;

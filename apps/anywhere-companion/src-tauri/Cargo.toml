@@ -1,0 +1,36 @@
+[package]
+name = "pi-anywhere-companion"
+version = "0.1.7"
+description = "Pimo desktop companion for Pi"
+authors = ["NAM-likestocode"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "pi_anywhere_companion_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+futures-util = "0.3"
+hex = "0.4"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2.6"
+tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
+urlencoding = "2.1"
+tauri = { version = "2.5", features = ["tray-icon"] }
+tauri-plugin-autostart = "2.3"
+tauri-plugin-single-instance = "2.3"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

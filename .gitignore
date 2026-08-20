@@ -8,6 +8,18 @@ models-store.json
 models-store.json.*
 *.bak*
 AGENTS.md
+state/
+.env
+.env.*
+!.env.example
+.npmrc
+*.pem
+*.key
+*.pfx
+*.jks
+credentials*.json
+google-services.json
+GoogleService-Info.plist
 
 # Pi-managed third-party package stores
 npm/
@@ -17,6 +29,33 @@ git/
 node_modules/
 coverage/
 *.log
+
+# Expo/Tauri generated output and local signing material
+apps/*/node_modules/
+apps/*/.expo/
+apps/*/dist/
+apps/*/dist-*/
+apps/*/build/
+apps/*/src-tauri/target/
+apps/*/src-tauri/gen/
+apps/*/android/.gradle/
+apps/*/android/.kotlin/
+apps/*/android/local.properties
+apps/*/android/*.iml
+apps/*/src-tauri/*.keystore
+apps/*/src-tauri/*.p12
+apps/*/src-tauri/*.cer
+apps/*/credentials/
+apps/*/eas.json.local
+*.mobileprovision
+*.p8
+*.p12
+*.keystore
+
+# Anywhere companion runtime state and rendezvous material
+.anywhere/
+apps/anywhere-companion/state/
+apps/anywhere-companion/*.log
 
 # Local executables and retired tunnel artifacts
 bin/

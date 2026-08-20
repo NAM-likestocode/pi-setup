@@ -136,7 +136,10 @@ function genericDetail(args: Record<string, unknown>): string | undefined {
   const entries: string[] = [];
   for (const key of ["action", "query", "pattern", "url", "path", "file_path"]) {
     const value = args[key];
-    if (typeof value === "string" && value) entries.push(`${key}: ${truncate(value, 240)}`);
+    if (typeof value === "string" && value) {
+      if ((key === "path" || key === "file_path") && isSensitivePath(value)) entries.push(`${key}: [sensitive path hidden]`);
+      else entries.push(`${key}: ${truncate(key === "url" ? redactCommand(value) : value, 240)}`);
+    }
   }
   return entries.length > 0 ? entries.join(" · ") : undefined;
 }
@@ -145,6 +148,7 @@ export function dashboardActivityForTool(input: ToolActivityInput): DashboardAct
   const args = asRecord(input.args) ?? {};
   const normalizedName = shortToolName(input.toolName);
   const filePath = stringField(args, "path", "file_path");
+  const displayPath = filePath && !isSensitivePath(filePath) ? filePath : filePath ? "sensitive file" : undefined;
   const commandValue = stringField(args, "command");
   const isCommand = normalizedName === "bash" || Boolean(commandValue);
   const isEdit = normalizedName === "edit" || normalizedName === "write";
@@ -167,11 +171,11 @@ export function dashboardActivityForTool(input: ToolActivityInput): DashboardAct
       : "Command";
     command = commandValue ? truncate(redactCommand(commandValue), MAX_COMMAND_CHARS) : undefined;
   } else if (normalizedName === "edit") {
-    label = `Edit ${filePath ?? "file"}`;
+    label = `Edit ${displayPath ?? "file"}`;
     const editCount = Array.isArray(args.edits) ? args.edits.length : 0;
     detail = editCount > 0 ? `${editCount} replacement${editCount === 1 ? "" : "s"}` : undefined;
   } else if (normalizedName === "write") {
-    label = `Write ${filePath ?? "file"}`;
+    label = `Write ${displayPath ?? "file"}`;
     if (typeof args.content === "string") {
       const lineCount = args.content.split("\n").length;
       detail = `${lineCount} line${lineCount === 1 ? "" : "s"} · ${Buffer.byteLength(args.content, "utf8")} bytes`;
@@ -211,7 +215,7 @@ export function dashboardActivityForTool(input: ToolActivityInput): DashboardAct
     toolName: input.toolName,
     agent: input.agent,
     runId: input.runId,
-    path: filePath,
+    path: filePath && !isSensitivePath(filePath) ? filePath : undefined,
     command,
     detail: detail ? truncate(detail, MAX_DETAIL_CHARS) : undefined,
     diff,

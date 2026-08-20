@@ -1,74 +1,114 @@
-# Pi Anywhere
+# Pimo
 
-`/Anywhere` creates an authenticated phone UI for the **current main Pi session** over your private Tailscale network.
+Pimo connects its private mobile app to every interactive Pi session on one computer. The internal transport remains the Anywhere v2 protocol so existing installs and pairings stay compatible.
 
-## Prerequisites and setup
+## Architecture
 
-- Install Tailscale on the Pi computer and the phone you will use.
-- Sign both devices into the same tailnet.
-- Enable MagicDNS and the tailnet's permission for Tailscale Serve/HTTPS. If Serve approval is still required, `/Anywhere` displays the approval link. Do not configure a different Serve route on this device first; Anywhere expects its Serve configuration to be empty.
-- Make sure Tailscale is connected before starting Pi. `tailscale status` should work, and the device must have a MagicDNS name.
-- Install the pinned `pi-ask-user` package from `settings.json`. This setup includes a compatibility patch at [`pi-ask-user-anywhere.patch`](./pi-ask-user-anywhere.patch). Apply it only if `/Anywhere` reports that the Anywhere transport hook is missing; see the compatibility section below.
+- `apps/anywhere-companion/` is the Pimo Companion Tauri 2 tray application for Windows, macOS, and Linux.
+- The companion owns the loopback HTTP API, internal Pi WebSocket registry, persistent pairing, Tailscale Serve, and generic Expo Push alerts.
+- `extensions/anywhere/` is a lightweight Pi instance client. It does not bind a public port or run Tailscale.
+- `apps/anywhere-mobile/` is the Pimo Expo/React Native app for Android and iPhone.
+- `packages/anywhere-protocol/` contains the versioned v2 DTOs and runtime validators.
 
-Anywhere starts its local HTTP server on an ephemeral `127.0.0.1` port and asks Tailscale to expose it privately as HTTPS on port 443. It refuses to overwrite an existing Tailscale Serve configuration, so resolve or remove another Serve configuration first if startup reports that one already exists.
+All Pi data travels through the computer's private Tailscale HTTPS address. Expo Push receives only a generic notification saying that Pi needs an answer; it never receives prompt text, project names, paths, or conversation data.
 
-## Use
+## Requirements
 
-1. Run `/reload` after installing or updating the extension and after applying the compatibility patch.
-2. In an interactive Pi session, run `/Anywhere`.
-3. Open the one-time pairing link shown above the editor on your Tailscale-connected phone.
-4. Use the page to chat with Pi or answer its `ask_user` questions.
-5. Run `/Anywhere off` to revoke the device and remove the Tailscale Serve route.
+- Node.js 22 or newer for the Pi harness.
+- Tailscale installed and signed in on the computer.
+- Tailscale MagicDNS enabled and Tailscale Serve/HTTPS permitted for the tailnet.
+- The Tauri companion running in the system tray.
+- A private Android APK or iOS internal build of the mobile app.
+
+Pimo Companion refuses to overwrite an unrelated Tailscale Serve configuration. It persists the exact loopback port of the route it created and will clean up a route after restart only when the current Serve handler exactly matches that ownership record. Resolve any other Serve configuration before enabling Pimo.
+
+## Pair a phone
+
+1. Start Pimo Companion and verify its tray icon is active.
+2. Start Pi in interactive TUI mode.
+3. Run `/reload` after installing or updating this harness.
+4. Run `/Pimo` to connect the Pi session, then choose **Show pairing QR** in Pimo Companion.
+5. Open **Pimo** on the phone and scan the QR.
+6. Choose an active Pi session from the list.
+
+The QR token is a 256-bit one-time secret in the URI fragment. It expires after ten minutes and is consumed once. The resulting device pairing survives restarts until explicitly revoked.
 
 Commands:
 
-- `/Anywhere` or `/Anywhere start` — start private HTTPS access and show a pairing link.
-- `/Anywhere status` — show whether it is active and paired.
-- `/Anywhere pair` — revoke the current device and make a new one-time pairing link.
-- `/Anywhere off` — revoke access and remove Anywhere's HTTPS route, even if another Pi instance started it.
+- `/Pimo` or `/Pimo start` — connect or reconnect this Pi session to Pimo Companion.
+- `/Pimo status` — show this Pi instance's connection state.
+- `/Pimo pair` — direct you to the one-time QR in Pimo Companion.
+- `/Pimo off` — revoke the phone, disable access, and remove only the Serve route owned by this companion.
 
-## What it does
+`/Anywhere` remains a legacy alias so existing workflows do not break.
 
-- Keeps the app server bound to `127.0.0.1`.
-- Uses Tailscale Serve to expose it as HTTPS only to devices in your tailnet; there is no public Cloudflare tunnel.
-- Uses a 256-bit one-time pairing secret in the URL fragment, so it is not sent in the initial HTTP request.
-- Stores the paired browser's device token in local browser storage, so closing/reopening the browser does not require pairing again while Anywhere is running.
-- Keeps one active paired device. Pairing a replacement requires an explicit `/Anywhere pair` command at the Pi terminal.
-- Sends phone text through `pi.sendUserMessage()` to the active main session. Busy sessions default to a follow-up queue instead of interruption.
-- Provides **All**, **Chat**, and **Commands & edits** timeline filters so active work is easy to inspect on a small screen.
-- Mirrors user/assistant text created after activation plus a dedicated activity timeline for commands, tools, edited paths, and expandable change previews. Raw tool output and the pre-existing transcript are not mirrored.
-- Redacts common secret-shaped command arguments and hides change previews for `.env`, credential JSON, private keys, and certificate files.
-- Uses the cooperative `pi-ask-user` hook to bind a remote answer to its exact pending question/tool call.
-- Works with the `project-subagents` addon: approvals can be answered from the paired phone, and nested subagent commands/edits appear with the agent name.
+The desktop window lists live Pi sessions. **Disconnect** removes only that session's remote bridge; Pi and its terminal keep running, and `/Pimo start` reconnects it. The tray menu provides pairing, re-pair, enable/disable, diagnostics, and quit actions. Closing the tray window hides it; quitting Pimo Companion does not revoke pairing.
+
+## Mobile behavior
+
+The app can:
+
+- list every connected interactive Pi session;
+- load bounded user/assistant text from the current active branch;
+- show redacted commands, edits, and specialist activity created live;
+- send idle, follow-up, or steering messages;
+- answer `ask_user` questions and specialist approvals;
+- register an Expo Push token after pairing;
+- revoke the current phone from Settings. If the companion cannot confirm revocation, the app retains the local credential and shows an error so the user can retry rather than falsely reporting a disconnect.
+
+The first valid terminal or phone answer wins. A losing answer receives `already_settled`, and the other UI is closed or marked as answered elsewhere.
 
 ## Security model
 
-The paired phone has the same conversational authority as the local Pi user and can see command/edit activity emitted after activation. Treat it as a high-privilege device. Redaction is defense-in-depth, not a guarantee that every possible secret format will be recognized.
+The paired phone has the same conversational authority as the local Pi user. Treat it as a high-privilege device.
 
-Defense layers:
+- Tailscale membership and WireGuard protect network access.
+- The companion binds both servers to loopback; only Tailscale Serve exposes the public HTTPS route.
+- Funnel and public relay access are not used.
+- Pairing and device bearer tokens are stored only as SHA-256 digests on the computer.
+- Device authentication uses a bearer header, constant-time digest comparison, size limits, and read/write rate limits.
+- The app stores the device credential in iOS Keychain/Android Keystore through `expo-secure-store` and clears it only after remote revocation succeeds (or when the server has already rejected it as invalid).
+- The app never stores credentials in AsyncStorage, URLs after pairing, logs, or notification payloads.
+- Thinking, raw tool output, images, full session trees, and arbitrary file browsing are excluded.
+- Commands and edits continue through the existing redaction and sensitive-file preview rules.
 
-- Tailscale membership and WireGuard encryption restrict network access to your tailnet.
-- Tailscale Serve provides HTTPS with your tailnet MagicDNS hostname.
-- Cross-instance shutdown removes only Anywhere's HTTPS port 443 handler; it does not reset unrelated Tailscale Serve routes on other ports.
-- A per-session, one-time 256-bit pairing secret and a distinct remembered device token protect the application itself.
-- The server uses constant-time token comparison, one-device pairing, immediate revocation, request-size limits, separate read/write rate limits, strict Host/Origin checks, and no cookies.
-- The page uses `no-store`, CSP, no-referrer, frame-denial, no third-party resources, and text-only DOM rendering.
+Persistent pairing should be revoked with `/Pimo off` or the mobile Settings screen when the phone is lost or no longer trusted.
 
-Do not forward a pairing link, leave the paired browser unlocked, or leave Anywhere running when you do not need it.
+## Development and private builds
 
-## `pi-ask-user` compatibility
-
-This installation includes a small cooperative change in the installed `pi-ask-user` package. The exact patch is saved as [`pi-ask-user-anywhere.patch`](./pi-ask-user-anywhere.patch). It is designed for `pi-ask-user` v0.13.0. Package updates can overwrite the hook; if `/Anywhere` reports that the hook is missing, reapply the patch from the installed `pi-ask-user` package directory and reload Pi.
-
-From Git Bash, after replacing `PI_AGENT_DIR` if you use a custom `PI_CODING_AGENT_DIR`:
+Install harness dependencies from the repository root:
 
 ```bash
-PI_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
-cd "$PI_AGENT_DIR/git/github.com/edlsh/pi-ask-user"
-git apply --check "$PI_AGENT_DIR/extensions/anywhere/pi-ask-user-anywhere.patch"
-git apply "$PI_AGENT_DIR/extensions/anywhere/pi-ask-user-anywhere.patch"
+npm install
+npm run typecheck
+npm test
+npm run companion:build
+npm run mobile:typecheck
 ```
 
-Only apply it when the hook is missing. If `git apply --check` says the patch is already applied, skip both commands and run `/reload`.
+Build private mobile artifacts after configuring a real EAS project ID in `apps/anywhere-mobile/app.json`:
 
-The regular terminal `ask_user` UI remains unchanged whenever Anywhere is off.
+```bash
+cd apps/anywhere-mobile
+npx eas build --profile android-internal --platform android
+npx eas build --profile ios-internal --platform ios
+```
+
+Build Tauri installers with Rust, Cargo, and platform signing tools installed:
+
+```bash
+cd apps/anywhere-companion
+npx tauri build
+```
+
+No signing credentials, EAS credentials, or generated build output belong in Git.
+
+## Protocol and fork
+
+Protocol v2 is intentionally incompatible with the old browser/v1 transport. The pinned package is the maintained fork:
+
+```text
+git:github.com/NAM-likestocode/pi-ask-user@b01089e7f67318e7d4fc3a44ad043c6d16c096e5
+```
+
+It keeps the native terminal UI open while exposing the same prompt to Pimo's authenticated bridge. Do not apply a post-install patch. Package updates must move the pinned fork commit deliberately and rerun the cooperative race tests.

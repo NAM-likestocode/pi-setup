@@ -7,7 +7,7 @@ describe("harness package pins", () => {
   });
 
   it.each([
-    "npm:context-mode",
+    "npm:some-package",
     "npm:@scope/package",
     "git:github.com/example/tool",
     "https://github.com/example/tool",
@@ -20,7 +20,8 @@ describe("harness package pins", () => {
   });
 
   it("passes all fail-level checks against the live harness", async () => {
-    const checks = await collectHarnessChecks("C:/Users/Fool/.pi/agent", ["read", "bash", "search_tools"]);
+    const harnessRoot = process.env.PI_HARNESS_TEST_ROOT ?? "C:/Users/Fool/.pi/agent";
+    const checks = await collectHarnessChecks(harnessRoot, ["read", "bash", "search_tools"]);
     expect(checks.filter((check) => check.level === "fail")).toEqual([]);
   });
 });

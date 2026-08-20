@@ -1,0 +1,27 @@
+{
+  "keybind": "ctrl+r",
+  "capture": {
+    "type": "ffmpeg",
+    "ffmpegPath": "ffmpeg",
+    "inputFormat": "dshow",
+    "input": "audio=Microphone (Elgato Wave XLR)",
+    "sampleRate": 16000,
+    "channels": 1,
+    "maxSeconds": 120,
+    "minBytes": 4096
+  },
+  "provider": {
+    "type": "openai-compatible",
+    "endpoint": "http://127.0.0.1:7777/v1/audio/transcriptions",
+    "model": "whisper-1",
+    "apiKeyEnv": "",
+    "language": "en"
+  },
+  "output": {
+    "appendTrailingSpace": true,
+    "submitOnStop": false
+  },
+  "cleanup": {
+    "enabled": false
+  }
+}

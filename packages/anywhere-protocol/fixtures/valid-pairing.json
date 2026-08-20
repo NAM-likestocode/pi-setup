@@ -1,0 +1,7 @@
+{
+  "version": 2,
+  "hostId": "test-host",
+  "baseUrl": "https://test-host.example.ts.net",
+  "machineName": "test-machine",
+  "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+}

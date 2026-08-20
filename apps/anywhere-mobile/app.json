@@ -1,0 +1,56 @@
+{
+	"expo": {
+		"name": "Pimo",
+		"slug": "pi-anywhere",
+		"version": "0.1.7",
+		"orientation": "portrait",
+		"scheme": "pi-anywhere",
+		"userInterfaceStyle": "dark",
+		"icon": "./assets/pimo-icon.png",
+		"splash": {
+			"image": "./assets/pimo-splash.png",
+			"resizeMode": "contain",
+			"backgroundColor": "#171411"
+		},
+		"newArchEnabled": true,
+		"ios": {
+			"supportsTablet": false,
+			"infoPlist": {
+				"NSCameraUsageDescription": "Scan the private Pimo pairing QR code.",
+				"NSLocalNetworkUsageDescription": "Connect to Pimo Companion through your private Tailscale network."
+			}
+		},
+		"android": {
+			"edgeToEdgeEnabled": false,
+			"versionCode": 8,
+			"package": "com.namlikestocode.pi.anywhere",
+			"adaptiveIcon": {
+				"foregroundImage": "./assets/pimo-adaptive-foreground.png",
+				"backgroundColor": "#171411"
+			},
+			"permissions": ["CAMERA", "POST_NOTIFICATIONS"],
+			"blockedPermissions": [
+				"android.permission.READ_EXTERNAL_STORAGE",
+				"android.permission.WRITE_EXTERNAL_STORAGE",
+				"android.permission.RECORD_AUDIO",
+				"android.permission.SYSTEM_ALERT_WINDOW"
+			]
+		},
+		"plugins": [
+			"expo-router",
+			[
+				"expo-camera",
+				{
+					"cameraPermission": "Scan the private Pimo pairing QR code.",
+					"microphonePermission": false
+				}
+			],
+			["expo-notifications", { "color": "#ff7a1a" }]
+		],
+		"extra": {
+			"eas": {
+				"projectId": "replace-with-private-eas-project-id"
+			}
+		}
+	}
+}
