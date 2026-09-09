@@ -1,9 +1,26 @@
+/**
+ * Project subagents: delegate bounded tasks to isolated child Pi processes.
+ *
+ * - Runs in the **background** by default: the tool returns immediately and the
+ *   child's report is delivered to this session as a follow-up message when it
+ *   finishes, so the parent can keep working on something else meanwhile.
+ * - Several children may run at once (`maxConcurrent`), and children can
+ *   delegate too (`maxDepth`), because they load this same extension.
+ * - Profiles come from `~/.pi/agent/agents/*.md` and `<project>/.pi/agents/*.md`,
+ *   plus the built-in general-purpose `worker`. Any run may override tools,
+ *   model, thinking and add instructions.
+ * - Every child's full `--mode json` event stream is written to
+ *   `<transcriptDir>/<runId>.jsonl` so front-ends (pi-desk) can show it live.
+ * - Policy lives in `~/.pi/agent/subagents.json` (see `SubagentConfig`).
+ *   Approval prompts are off by default.
+ */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createWriteStream, existsSync, statSync, type WriteStream } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message, Usage } from "@earendil-works/pi-ai";
 import {
@@ -20,7 +37,15 @@ import {
   type DashboardActivity,
 } from "../_shared/dashboard-activity.ts";
 import { shouldConsiderSubagent } from "../00-dynamic-tool-loader.ts";
-import { discoverProjectAgents, type ProjectAgent } from "./agents.ts";
+import {
+  applyOverrides,
+  discoverProjectAgents,
+  loadSubagentConfig,
+  WORKER_AGENT,
+  type ProjectAgent,
+  type RunMode,
+  type SubagentConfig,
+} from "./agents.ts";
 
 const PROMPT_PROTOCOL_VERSION = 2;
 const PROMPT_OPEN_CHANNEL = "anywhere:prompt:v2:open";
@@ -30,7 +55,9 @@ const MAX_TASK_CHARS = 12_000;
 const MAX_OUTPUT_BYTES = 50 * 1024;
 const MAX_STDERR_CHARS = 12_000;
 const MAX_ACTIVITY_ITEMS = 100;
+const MAX_FINISHED_RUNS = 50;
 const STATUS_ID = "project-subagents";
+const THIS_EXTENSION = fileURLToPath(import.meta.url);
 
 interface ActivitySummary {
   label: string;
@@ -40,10 +67,17 @@ interface ActivitySummary {
   isError?: boolean;
 }
 
-interface SubagentDetails {
+export type SubagentStatus = "awaiting-approval" | "running" | "completed" | "cancelled" | "failed";
+
+/** Progress / result payload attached to the tool call (`details`). Consumed by the TUI renderer and by pi-desk. */
+export interface SubagentDetails {
   runId: string;
-  status: "awaiting-approval" | "running" | "completed" | "cancelled" | "failed";
+  status: SubagentStatus;
+  /** Profile name (`worker`, `scout`, …). */
   agent: string;
+  /** Display name for this run (from the `name` parameter, else the profile). */
+  name: string;
+  mode: RunMode;
   source: ProjectAgent["source"];
   activation: ProjectAgent["activation"];
   access: ProjectAgent["access"];
@@ -52,11 +86,18 @@ interface SubagentDetails {
   agentFile: string;
   tools: string[];
   model?: string;
+  thinking?: string;
+  cwd: string;
+  depth: number;
+  parentRunId?: string;
+  /** Full child event stream (`--mode json`), one JSON object per line. */
+  transcriptPath?: string;
   startedAt?: number;
   durationMs?: number;
   activities: ActivitySummary[];
   usage: Usage;
   output?: string;
+  errorMessage?: string;
 }
 
 interface ChildRunResult {
@@ -68,6 +109,13 @@ interface ChildRunResult {
   usage: Usage;
   activities: ActivitySummary[];
   model?: string;
+}
+
+interface Run {
+  details: SubagentDetails;
+  child?: ChildProcess;
+  abort: AbortController;
+  done: Promise<ChildRunResult>;
 }
 
 interface RemoteAnswer {
@@ -162,7 +210,7 @@ function emitActivity(pi: ExtensionAPI, activity: DashboardActivity): void {
 function lifecycleActivity(
   runId: string,
   phase: "start" | "end",
-  agent: ProjectAgent,
+  name: string,
   task: string,
   isError = false,
   detail?: string,
@@ -173,15 +221,36 @@ function lifecycleActivity(
     phase,
     source: "subagent",
     category: "subagent",
-    label: `${agent.name} subagent`,
+    label: `${name} subagent`,
     timestamp: Date.now(),
-    agent: agent.name,
+    agent: name,
     runId,
     task,
     detail,
     isError,
   };
 }
+
+function summaryFromActivity(activity: DashboardActivity): ActivitySummary {
+  return {
+    label: activity.label,
+    category: activity.category,
+    command: activity.command,
+    path: activity.path,
+    isError: activity.isError,
+  };
+}
+
+function currentDepth(): number {
+  const raw = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+}
+
+function describeProfile(agent: ProjectAgent): string {
+  return `${agent.name} [${agent.access}; ${agent.model}, ${agent.thinking}; ${agent.tools.join(", ") || "no tools"}]`;
+}
+
+// --- approval (only when `approval: "always"` is configured) --------------
 
 function remotePromptAvailable(pi: ExtensionAPI): boolean {
   let available = false;
@@ -194,6 +263,22 @@ function remotePromptAvailable(pi: ExtensionAPI): boolean {
     },
   });
   return available;
+}
+
+function approvalMessage(agent: ProjectAgent, reason: string, task: string): string {
+  return [
+    agent.description,
+    `Why Pi recommends it: ${reason}`,
+    `Source: ${agent.source} — ${agent.filePath}`,
+    `Access: ${agent.access}`,
+    `Tools: ${agent.tools.join(", ") || "none"}`,
+    `Model: ${agent.model}`,
+    `Thinking: ${agent.thinking}`,
+    "",
+    `Exact task:\n${task}`,
+    "",
+    "No child process has started. The main Pi agent remains responsible for checking the result.",
+  ].join("\n");
 }
 
 function requestRemoteApproval(
@@ -226,19 +311,7 @@ function requestRemoteApproval(
     id: runId,
     kind: "specialist",
     question: `Run specialist “${agent.name}”?`,
-    context: [
-      agent.description,
-      `Why Pi recommends it: ${reason}`,
-      `Source: ${agent.source} — ${agent.filePath}`,
-      `Access: ${agent.access}`,
-      `Tools: ${agent.tools.join(", ") || "none"}`,
-      `Model: ${agent.model}`,
-      `Thinking: ${agent.thinking}`,
-      "",
-      `Exact task:\n${task}`,
-      "",
-      "No child process has started. The main Pi agent remains responsible for checking the result.",
-    ].join("\n"),
+    context: approvalMessage(agent, reason, task),
     options: [
       { title: "Run subagent", description: "Approve this one project-specific run" },
       { title: "Cancel", description: "Do not start any subagent work" },
@@ -268,22 +341,9 @@ async function confirmRun(
   const localAbort = new AbortController();
   const onAbort = () => localAbort.abort();
   signal?.addEventListener("abort", onAbort, { once: true });
-  const promptMessage = [
-    agent.description,
-    `Why Pi recommends it: ${reason}`,
-    `Source: ${agent.source} — ${agent.filePath}`,
-    `Access: ${agent.access}`,
-    `Tools: ${agent.tools.join(", ") || "none"}`,
-    `Model: ${agent.model}`,
-    `Thinking: ${agent.thinking}`,
-    "",
-    `Exact task:\n${task}`,
-    "",
-    "No child process has started. The main Pi agent remains responsible for checking the result.",
-  ].join("\n");
   const remote = requestRemoteApproval(pi, runId, agent, reason, task, localAbort.signal);
   const local = ctx.hasUI
-    ? ctx.ui.confirm(`Run specialist “${agent.name}”?`, promptMessage, { signal: localAbort.signal })
+    ? ctx.ui.confirm(`Run specialist “${agent.name}”?`, approvalMessage(agent, reason, task), { signal: localAbort.signal })
     : Promise.resolve(false);
   if (!remote) {
     const result = await local;
@@ -299,40 +359,41 @@ async function confirmRun(
   return winner.value;
 }
 
-function summaryFromActivity(activity: DashboardActivity): ActivitySummary {
-  return {
-    label: activity.label,
-    category: activity.category,
-    command: activity.command,
-    path: activity.path,
-    isError: activity.isError,
-  };
+// --- child process ----------------------------------------------------------
+
+interface ChildOptions {
+  agent: ProjectAgent;
+  task: string;
+  cwd: string;
+  depth: number;
+  maxDepth: number;
+  /** Extra extension files every child loads (provider auth shims etc.). */
+  childExtensions: string[];
+  model?: string;
+  thinking?: string;
+  transcript?: WriteStream;
+  signal: AbortSignal;
+  onProgress: (update: { activities: ActivitySummary[]; usage: Usage; model?: string }) => void;
 }
 
-async function runChild(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  runId: string,
-  agent: ProjectAgent,
-  reason: string,
-  task: string,
-  signal: AbortSignal | undefined,
-  onProgress: (details: SubagentDetails) => void,
-): Promise<ChildRunResult> {
+async function runChild(pi: ExtensionAPI, runId: string, options: ChildOptions): Promise<ChildRunResult> {
+  const { agent, task, cwd, depth, maxDepth, transcript, signal } = options;
   const promptDir = await mkdtemp(join(tmpdir(), "pi-project-subagent-"));
   const promptFile = join(promptDir, `${agent.name}-prompt.md`);
+  const canDelegate = depth + 1 < maxDepth;
   const systemPrompt = [
-    `You are the trusted ${agent.source}-level specialist “${agent.name}”.`,
+    `You are the ${agent.source}-level agent “${agent.name}” (delegation depth ${depth + 1}).`,
     agent.systemPrompt,
     "",
-    "Run boundary: complete only the exact delegated task. Do not broaden the scope, launch other agents, or make changes outside that task.",
-    "Keep the result short and plain. Lead with the answer, include only useful evidence, and clearly label uncertainty.",
+    "Run boundary: complete only the exact delegated task. Do not broaden the scope or make changes outside it.",
+    canDelegate
+      ? "You may delegate a genuinely separable sub-part with the subagent tool, but prefer doing the work yourself."
+      : "Do not launch other agents.",
+    "Keep the final report short and plain. Lead with the answer, include only useful evidence, and clearly label uncertainty.",
     "Do not claim that you edited, executed, or verified anything your available tools could not actually do.",
   ].join("\n");
   await writeFile(promptFile, systemPrompt, { encoding: "utf8", mode: 0o600 });
 
-  const selectedModel = agent.model;
-  const selectedThinking = agent.thinking;
   const args = [
     "--mode", "json",
     "--print",
@@ -343,12 +404,14 @@ async function runChild(
     "--approve",
     "--append-system-prompt", promptFile,
   ];
+  for (const extensionPath of options.childExtensions) args.push("--extension", extensionPath);
+  if (canDelegate) args.push("--extension", THIS_EXTENSION);
   for (const extensionPath of agent.extensionPaths) args.push("--extension", extensionPath);
   if (agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
   else args.push("--no-tools");
-  if (selectedModel) args.push("--model", selectedModel);
-  if (selectedThinking) args.push("--thinking", selectedThinking);
-  args.push(`Task delegated by the main Pi agent:\n\n${task}`);
+  if (options.model) args.push("--model", options.model);
+  if (options.thinking) args.push("--thinking", options.thinking);
+  args.push(`Task delegated by the parent Pi agent:\n\n${task}`);
 
   const usage = emptyUsage();
   const activities: ActivitySummary[] = [];
@@ -357,40 +420,32 @@ async function runChild(
   let output = "";
   let stopReason: string | undefined;
   let errorMessage: string | undefined;
-  let childModel = selectedModel;
+  let childModel = options.model;
   let aborted = false;
 
-  const baseDetails = (): SubagentDetails => ({
-    runId,
-    status: "running",
-    agent: agent.name,
-    source: agent.source,
-    activation: agent.activation,
-    access: agent.access,
-    reason,
-    task,
-    agentFile: agent.filePath,
-    tools: agent.tools,
-    model: childModel,
-    activities: [...activities],
-    usage: { ...usage, cost: { ...usage.cost } },
-  });
+  const progress = () => options.onProgress({ activities: [...activities], usage: { ...usage, cost: { ...usage.cost } }, model: childModel });
 
   try {
     const exitCode = await new Promise<number>((resolveExit) => {
       const invocation = getPiInvocation(args);
       const child = spawn(invocation.command, invocation.args, {
-        cwd: ctx.cwd,
+        cwd,
         shell: false,
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, PI_PROJECT_SUBAGENT: "1", PI_SUBAGENT_RUN_ID: runId },
+        env: {
+          ...process.env,
+          PI_PROJECT_SUBAGENT: "1",
+          PI_SUBAGENT_RUN_ID: runId,
+          PI_SUBAGENT_DEPTH: String(depth + 1),
+        },
       });
       let buffer = "";
       let closed = false;
 
       const processLine = (line: string): void => {
         if (!line.trim()) return;
+        transcript?.write(`${line}\n`);
         let event: Record<string, unknown>;
         try {
           event = JSON.parse(line) as Record<string, unknown>;
@@ -412,7 +467,7 @@ async function runChild(
           activities.push(summaryFromActivity(activity));
           if (activities.length > MAX_ACTIVITY_ITEMS) activities.shift();
           emitActivity(pi, activity);
-          onProgress(baseDetails());
+          progress();
           return;
         }
 
@@ -432,7 +487,7 @@ async function runChild(
           const prior = activities.findLast((item) => item.label === activity.label && item.category === activity.category);
           if (prior) prior.isError = activity.isError;
           emitActivity(pi, activity);
-          onProgress(baseDetails());
+          progress();
           return;
         }
 
@@ -445,7 +500,7 @@ async function runChild(
             childModel = message.model || childModel;
             stopReason = message.stopReason;
             errorMessage = message.errorMessage;
-            onProgress(baseDetails());
+            progress();
           }
         }
       };
@@ -473,9 +528,9 @@ async function runChild(
         aborted = true;
         stopProcessTree(child);
       };
-      if (signal?.aborted) abort();
-      else signal?.addEventListener("abort", abort, { once: true });
-      child.once("close", () => signal?.removeEventListener("abort", abort));
+      if (signal.aborted) abort();
+      else signal.addEventListener("abort", abort, { once: true });
+      child.once("close", () => signal.removeEventListener("abort", abort));
     });
 
     if (aborted) {
@@ -497,6 +552,8 @@ async function runChild(
   }
 }
 
+// --- formatting ---------------------------------------------------------------
+
 function formatUsage(usage: Usage): string {
   const parts: string[] = [];
   if (usage.input) parts.push(`↑${usage.input}`);
@@ -513,52 +570,245 @@ function resultText(result: AgentToolResult<SubagentDetails>): string {
     .join("\n");
 }
 
+function touchedPaths(activities: ActivitySummary[]): string[] {
+  return [...new Set(activities.filter((item) => item.category === "edit" && item.path).map((item) => item.path as string))];
+}
+
+function completionReport(details: SubagentDetails): string {
+  const seconds = details.durationMs !== undefined ? `${(details.durationMs / 1000).toFixed(1)}s` : "";
+  const head = `[Subagent "${details.name}" ${details.status}${seconds ? ` in ${seconds}` : ""} · ${details.activities.length} tool call${details.activities.length === 1 ? "" : "s"}${details.usage.cost.total ? ` · $${details.usage.cost.total.toFixed(4)}` : ""} · id ${details.runId}]`;
+  const files = touchedPaths(details.activities);
+  const body = details.status === "completed"
+    ? details.output || "(no text report)"
+    : `It did not complete: ${details.errorMessage ?? details.status}.${details.output ? `\n\nLast report:\n${details.output}` : ""}`;
+  return [
+    head,
+    "",
+    body,
+    files.length > 0 ? `\nFiles it edited: ${files.join(", ")}` : "",
+    "",
+    "Treat this as evidence, not authority: verify what matters before relying on it, then continue.",
+  ].filter((line) => line !== "").join("\n");
+}
+
+// --- tool ---------------------------------------------------------------------
+
 const SubagentParams = Type.Object({
-  agent: Type.String({ description: "Name of an available user or project specialist" }),
-  reason: Type.String({ minLength: 1, maxLength: 500, description: "One plain sentence explaining why this specialist is worth the coordination overhead" }),
-  task: Type.String({ minLength: 1, maxLength: MAX_TASK_CHARS, description: "A narrow, exact task with a clear expected result" }),
+  task: Type.String({ minLength: 1, maxLength: MAX_TASK_CHARS, description: "A bounded, exact task with a clear expected result. Include the file paths, commands, and acceptance criteria the child needs; it does not see this conversation." }),
+  reason: Type.String({ minLength: 1, maxLength: 500, description: "One plain sentence explaining why delegating this is worthwhile" }),
+  agent: Type.Optional(Type.String({ description: `Profile to use: "${WORKER_AGENT}" (default; full tools) or a named specialist listed in the system prompt` })),
+  name: Type.Optional(Type.String({ maxLength: 60, description: "Short label for this run, e.g. \"auth-feature\" (defaults to the profile name)" })),
+  mode: Type.Optional(Type.Union([Type.Literal("background"), Type.Literal("wait")], { description: "background (default): return immediately, the report arrives later as a message. wait: block until the child finishes and return its report." })),
+  tools: Type.Optional(Type.Array(Type.String(), { description: "Restrict or change the child's tools (subset of read, bash, edit, write, grep, find, ls, and web tools when available)" })),
+  model: Type.Optional(Type.String({ description: "Override model as provider/id, e.g. anthropic/claude-haiku-4-5" })),
+  thinking: Type.Optional(Type.String({ description: "Override thinking level: off, minimal, low, medium, high, xhigh, max" })),
+  instructions: Type.Optional(Type.String({ maxLength: 4000, description: "Extra system-prompt instructions for this run (conventions, constraints, style)" })),
+  cwd: Type.Optional(Type.String({ description: "Working directory for the child (absolute, or relative to the current one)" })),
 });
 
 export default function projectSubagents(pi: ExtensionAPI): void {
-  if (process.env.PI_PROJECT_SUBAGENT === "1") return;
+  const depth = currentDepth();
+  const runs = new Map<string, Run>();
+  const order: string[] = [];
+  let lastUiContext: ExtensionContext | undefined;
 
-  let activeRunId: string | undefined;
+  const running = () => [...runs.values()].filter((run) => run.details.status === "running" || run.details.status === "awaiting-approval");
+
+  function remember(run: Run): void {
+    runs.set(run.details.runId, run);
+    order.push(run.details.runId);
+    while (order.length > MAX_FINISHED_RUNS) {
+      const oldest = order[0];
+      const candidate = runs.get(oldest);
+      if (candidate && (candidate.details.status === "running" || candidate.details.status === "awaiting-approval")) break;
+      order.shift();
+      if (oldest) runs.delete(oldest);
+    }
+  }
+
+  function refreshStatus(ctx: ExtensionContext | undefined): void {
+    const target = ctx ?? lastUiContext;
+    if (!target?.hasUI) return;
+    const active = running();
+    if (active.length === 0) {
+      target.ui.setStatus(STATUS_ID, undefined);
+      return;
+    }
+    const parts = active.map((run) => {
+      const last = run.details.activities.at(-1);
+      const doing = last ? ` (${(last.command ?? last.path ?? last.label).slice(0, 40)})` : "";
+      return `${run.details.name}${doing}`;
+    });
+    target.ui.setStatus(STATUS_ID, target.ui.theme.fg("warning", `⚙ ${active.length} subagent${active.length === 1 ? "" : "s"}: ${parts.join(", ")}`));
+  }
+
+  function finish(run: Run, result: ChildRunResult): SubagentDetails {
+    const details = run.details;
+    const failed = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+    details.durationMs = details.startedAt !== undefined ? Date.now() - details.startedAt : undefined;
+    details.activities = result.activities;
+    details.usage = result.usage;
+    details.model = result.model ?? details.model;
+    details.output = result.output || undefined;
+    if (result.stopReason === "aborted") {
+      details.status = "cancelled";
+      details.errorMessage = result.errorMessage ?? "cancelled";
+    } else if (failed) {
+      details.status = "failed";
+      details.errorMessage = result.errorMessage || result.stderr || `child Pi exited with code ${result.exitCode}`;
+    } else {
+      details.status = "completed";
+    }
+    return details;
+  }
+
+  async function startRun(
+    ctx: ExtensionContext,
+    config: SubagentConfig,
+    details: SubagentDetails,
+    agent: ProjectAgent,
+    signal: AbortSignal | undefined,
+    onProgress: (details: SubagentDetails) => void,
+  ): Promise<Run> {
+    const abort = new AbortController();
+    const onParentAbort = () => abort.abort();
+    // In wait mode the parent's abort cancels the child; in background mode the child keeps going.
+    if (details.mode === "wait") signal?.addEventListener("abort", onParentAbort, { once: true });
+
+    let transcript: WriteStream | undefined;
+    try {
+      await mkdir(config.transcriptDir, { recursive: true });
+      const path = join(config.transcriptDir, `${details.runId}.jsonl`);
+      transcript = createWriteStream(path, { flags: "w", mode: 0o600 });
+      details.transcriptPath = path;
+      transcript.write(`${JSON.stringify({ type: "subagent_start", ...details, activities: [], usage: undefined })}\n`);
+    } catch {
+      transcript = undefined;
+    }
+
+    details.status = "running";
+    details.startedAt = Date.now();
+    const run: Run = { details, abort, done: Promise.resolve() as unknown as Promise<ChildRunResult> };
+
+    run.done = runChild(pi, details.runId, {
+      agent,
+      task: details.task,
+      cwd: details.cwd,
+      depth,
+      maxDepth: config.maxDepth,
+      childExtensions: config.childExtensions,
+      model: details.model,
+      thinking: details.thinking,
+      transcript,
+      signal: abort.signal,
+      onProgress: (update) => {
+        details.activities = update.activities;
+        details.usage = update.usage;
+        if (update.model) details.model = update.model;
+        onProgress(details);
+        refreshStatus(ctx);
+      },
+    }).then((result) => {
+      finish(run, result);
+      transcript?.write(`${JSON.stringify({
+        type: "subagent_exit",
+        runId: details.runId,
+        status: details.status,
+        exitCode: result.exitCode,
+        durationMs: details.durationMs,
+        usage: details.usage,
+        activities: details.activities,
+        model: details.model,
+        output: details.output,
+        errorMessage: details.errorMessage,
+      })}\n`);
+      transcript?.end();
+      signal?.removeEventListener("abort", onParentAbort);
+      refreshStatus(ctx);
+      return result;
+    }, (error) => {
+      details.status = "failed";
+      details.errorMessage = error instanceof Error ? error.message : String(error);
+      details.durationMs = details.startedAt !== undefined ? Date.now() - details.startedAt : undefined;
+      transcript?.write(`${JSON.stringify({ type: "subagent_exit", runId: details.runId, status: "failed", errorMessage: details.errorMessage })}\n`);
+      transcript?.end();
+      signal?.removeEventListener("abort", onParentAbort);
+      refreshStatus(ctx);
+      throw error;
+    });
+
+    remember(run);
+    refreshStatus(ctx);
+    emitActivity(pi, lifecycleActivity(details.runId, "start", details.name, details.task, false, `${details.mode} run started (${details.model ?? "inherited model"}).`));
+    return run;
+  }
+
+  if (depth >= loadSubagentConfig().maxDepth) return;
 
   pi.registerTool({
     name: "subagent",
-    label: "Specialist",
-    description: "Ask one trusted user-level or project-level specialist to perform a narrow task in an isolated Pi process. Use it only when independent investigation or review will materially improve the result. Every run shows the reason, exact task, source, access, and tools for user approval before the child starts.",
-    promptSnippet: "Use one approved specialist only when its benefit clearly exceeds delegation overhead",
+    label: "Subagent",
+    description: `Delegate a bounded task to an isolated child Pi that runs in the background while you continue. Default profile "${WORKER_AGENT}" has full tools; named specialists may also be available. The child does not see this conversation, so put everything it needs into the task. Its report arrives later as a message beginning with [Subagent "<name>" …]; use mode "wait" if you need the result before you can continue.`,
+    promptSnippet: "Delegate separable work to background subagents and keep working meanwhile",
     promptGuidelines: [
-      "Use subagent only for a bounded investigation or independent review that will materially improve accuracy or keep substantial research out of the parent context.",
-      "Do not use subagent for straightforward questions, routine commands, simple or single-file work, work already understood, or as a ritual review step.",
-      "Prefer proposal-enabled scout, researcher, or reviewer agents; project-defined and editing agents are explicit-request only.",
-      "Call subagent at most once for a task, never create chains or swarms, and independently check important claims before acting on the result.",
+      "Use subagent for work that can proceed independently: implementing a separate feature or module, a broad investigation, a review, or verification that would otherwise block you.",
+      "Do not delegate trivial steps, single small edits, or anything that needs this conversation's context the child cannot be given in the task text.",
+      "Give each child a self-contained task with paths, commands, and acceptance criteria; several children may run at once on disjoint scopes. Avoid two children editing the same files.",
+      "After a [Subagent …] report arrives, verify what matters (diff, tests) before building on it.",
     ],
     parameters: SubagentParams,
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
+      lastUiContext = ctx;
       const reason = params.reason.trim();
       const task = params.task.trim();
-      if (!reason) throw new Error("Explain in one sentence why this specialist is worth using.");
-      if (!task) throw new Error("Specialist task cannot be empty.");
-      if (!ctx.isProjectTrusted()) throw new Error("Specialists are disabled because this project is not trusted.");
-      if (activeRunId) throw new Error("A specialist is already active. Wait for it to finish before requesting another run.");
+      if (!reason) throw new Error("Explain in one sentence why delegating is worth it.");
+      if (!task) throw new Error("Subagent task cannot be empty.");
+      if (!ctx.isProjectTrusted()) throw new Error("Subagents are disabled because this project is not trusted.");
 
-      const discovery = discoverProjectAgents(ctx.cwd);
-      const agent = discovery.agents.find((candidate) => candidate.name === params.agent);
-      if (!agent) {
-        const available = discovery.agents.map((candidate) => candidate.name).join(", ") || "none";
-        const diagnostics = discovery.diagnostics.length > 0 ? `\nConfiguration issues: ${discovery.diagnostics.join("; ")}` : "";
-        throw new Error(`Unknown specialist “${params.agent}”. Available specialists: ${available}.${diagnostics}`);
+      const config = loadSubagentConfig();
+      const active = running();
+      if (active.length >= config.maxConcurrent) {
+        throw new Error(`${active.length} subagents are already running (maxConcurrent=${config.maxConcurrent}). Wait for a report or stop one with /subagents stop <id>.`);
       }
 
+      const discovery = discoverProjectAgents(ctx.cwd);
+      const profileName = params.agent?.trim() || WORKER_AGENT;
+      const base = discovery.agents.find((candidate) => candidate.name === profileName);
+      if (!base) {
+        const available = discovery.agents.map((candidate) => candidate.name).join(", ");
+        const diagnostics = discovery.diagnostics.length > 0 ? `\nConfiguration issues: ${discovery.diagnostics.join("; ")}` : "";
+        throw new Error(`Unknown subagent profile “${profileName}”. Available: ${available}.${diagnostics}`);
+      }
+      const diagnostics: string[] = [];
+      const agent = applyOverrides(base, {
+        tools: params.tools,
+        model: params.model?.trim(),
+        thinking: params.thinking?.trim(),
+        instructions: params.instructions,
+      }, config, diagnostics);
+      if (agent.tools.length === 0 && (params.tools?.length ?? 0) > 0) {
+        throw new Error(`None of the requested tools are available to a child: ${params.tools?.join(", ")}`);
+      }
+
+      const cwd = params.cwd?.trim() ? (isAbsolute(params.cwd.trim()) ? params.cwd.trim() : resolve(ctx.cwd, params.cwd.trim())) : ctx.cwd;
+      let isDir = false;
+      try { isDir = statSync(cwd).isDirectory(); } catch { isDir = false; }
+      if (!isDir) throw new Error(`Working directory does not exist: ${cwd}`);
+
+      const inheritModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+      const model = agent.model === "inherit" ? inheritModel : agent.model;
+      const thinking = agent.thinking === "inherit" ? pi.getThinkingLevel() : agent.thinking;
+      const mode: RunMode = params.mode ?? config.defaultMode;
       const runId = `subagent-${toolCallId || randomUUID()}`;
-      activeRunId = runId;
-      const initialDetails: SubagentDetails = {
+      const name = params.name?.trim() || agent.name;
+
+      const details: SubagentDetails = {
         runId,
-        status: "awaiting-approval",
+        status: config.approval === "always" ? "awaiting-approval" : "running",
         agent: agent.name,
+        name,
+        mode,
         source: agent.source,
         activation: agent.activation,
         access: agent.access,
@@ -566,86 +816,77 @@ export default function projectSubagents(pi: ExtensionAPI): void {
         task,
         agentFile: agent.filePath,
         tools: agent.tools,
-        model: agent.model,
+        model,
+        thinking,
+        cwd,
+        depth,
+        parentRunId: process.env.PI_SUBAGENT_RUN_ID || undefined,
         activities: [],
         usage: emptyUsage(),
       };
-      onUpdate?.({ content: [{ type: "text", text: `Waiting for approval to run ${agent.name}…` }], details: initialDetails });
+      const progressText = (d: SubagentDetails) => `${d.name} is running (${d.activities.length} tool call${d.activities.length === 1 ? "" : "s"})…`;
+      onUpdate?.({ content: [{ type: "text", text: details.status === "awaiting-approval" ? `Waiting for approval to run ${name}…` : progressText(details) }], details: { ...details } });
 
-      try {
+      if (config.approval === "always") {
         const approved = await confirmRun(pi, ctx, runId, agent, reason, task, signal);
         if (!approved) {
           return {
-            content: [{ type: "text", text: `Subagent ${agent.name} was not started because the user did not approve this run.` }],
-            details: { ...initialDetails, status: "cancelled" },
+            content: [{ type: "text", text: `Subagent ${name} was not started because the user did not approve this run.` }],
+            details: { ...details, status: "cancelled" },
           };
         }
+      }
 
-        const startedAt = Date.now();
-        ctx.ui.setStatus(STATUS_ID, ctx.ui.theme.fg("warning", `subagent: ${agent.name}`));
-        emitActivity(pi, lifecycleActivity(runId, "start", agent, task, false, "Approved; isolated child Pi started."));
+      const run = await startRun(ctx, config, details, agent, signal, (d) => {
+        onUpdate?.({ content: [{ type: "text", text: progressText(d) }], details: { ...d } });
+      });
 
-        const update = (details: SubagentDetails): void => {
-          onUpdate?.({
-            content: [{ type: "text", text: `${agent.name} is running (${details.activities.length} tool call${details.activities.length === 1 ? "" : "s"})…` }],
-            details: { ...details, startedAt },
-          });
-        };
-        let child: ChildRunResult;
+      if (mode === "wait") {
+        let result: ChildRunResult;
         try {
-          child = await runChild(pi, ctx, runId, agent, reason, task, signal, update);
+          result = await run.done;
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
-          emitActivity(pi, lifecycleActivity(runId, "end", agent, task, true, detail));
+          emitActivity(pi, lifecycleActivity(runId, "end", name, task, true, detail));
           throw error;
         }
-        const failed = child.exitCode !== 0 || child.stopReason === "error" || child.stopReason === "aborted";
-        const durationMs = Date.now() - startedAt;
-        const failure = child.errorMessage || child.stderr || `child Pi exited with code ${child.exitCode}`;
-        emitActivity(pi, lifecycleActivity(
-          runId,
-          "end",
-          agent,
-          task,
-          failed,
-          failed ? failure : `Completed in ${(durationMs / 1000).toFixed(1)}s.`,
-        ));
-
-        if (failed) throw new Error(`${agent.name} subagent failed: ${failure}`);
-        const output = child.output || "(Subagent completed without a text response.)";
+        const final = run.details;
+        emitActivity(pi, lifecycleActivity(runId, "end", name, task, final.status !== "completed", final.status === "completed" ? `Completed in ${((final.durationMs ?? 0) / 1000).toFixed(1)}s.` : (final.errorMessage ?? final.status)));
+        if (final.status !== "completed") throw new Error(`${name} subagent ${final.status}: ${final.errorMessage ?? "no details"}`);
         return {
-          content: [{ type: "text", text: output }],
-          details: {
-            runId,
-            status: "completed",
-            agent: agent.name,
-            source: agent.source,
-            activation: agent.activation,
-            access: agent.access,
-            reason,
-            task,
-            agentFile: agent.filePath,
-            tools: agent.tools,
-            model: child.model,
-            startedAt,
-            durationMs,
-            activities: child.activities,
-            usage: child.usage,
-            output,
-          },
-          usage: child.usage,
+          content: [{ type: "text", text: final.output || "(Subagent completed without a text response.)" }],
+          details: { ...final },
+          usage: result.usage,
         };
-      } finally {
-        activeRunId = undefined;
-        ctx.ui.setStatus(STATUS_ID, undefined);
       }
+
+      // Background: report later via a follow-up message; the tool call itself returns now.
+      run.done.then(() => {
+        const final = run.details;
+        emitActivity(pi, lifecycleActivity(runId, "end", name, task, final.status !== "completed", final.status === "completed" ? `Completed in ${((final.durationMs ?? 0) / 1000).toFixed(1)}s.` : (final.errorMessage ?? final.status)));
+        pi.sendUserMessage(completionReport(final), { deliverAs: "followUp" });
+      }, () => {
+        emitActivity(pi, lifecycleActivity(runId, "end", name, task, true, run.details.errorMessage));
+        pi.sendUserMessage(completionReport(run.details), { deliverAs: "followUp" });
+      });
+
+      const notes = diagnostics.length > 0 ? `\nNotes: ${diagnostics.join("; ")}` : "";
+      return {
+        content: [{
+          type: "text",
+          text: `Started subagent "${name}" (${describeProfile(agent)}) in the background, id ${runId}.\nIts report will arrive as a message beginning with [Subagent "${name}" …] when it finishes. Continue with other work now; do not wait or poll for it.${notes}`,
+        }],
+        details: { ...run.details },
+      };
     },
 
     renderCall(args, theme) {
       const task = typeof args.task === "string" ? args.task : "…";
       const preview = task.length > 100 ? `${task.slice(0, 100)}…` : task;
+      const label = typeof args.name === "string" && args.name ? args.name : String(args.agent ?? WORKER_AGENT);
+      const mode = args.mode === "wait" ? theme.fg("muted", " (wait)") : "";
       return new Text(
-        `${theme.fg("toolTitle", theme.bold("specialist"))} ${theme.fg("accent", String(args.agent ?? "…"))}\n${theme.fg("dim", preview)}`,
+        `${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", label)}${mode}\n${theme.fg("dim", preview)}`,
         0,
         0,
       );
@@ -661,7 +902,8 @@ export default function projectSubagents(pi: ExtensionAPI): void {
           : details.status === "cancelled"
             ? theme.fg("muted", "○")
             : theme.fg("warning", "⏳");
-      let header = `${statusIcon} ${theme.fg("accent", theme.bold(details.agent))} ${theme.fg("muted", details.status)}`;
+      let header = `${statusIcon} ${theme.fg("accent", theme.bold(details.name))} ${theme.fg("muted", details.status)}`;
+      if (details.mode === "background" && details.status === "running") header += theme.fg("dim", " · background, report follows");
       if (details.durationMs !== undefined) header += theme.fg("dim", ` · ${(details.durationMs / 1000).toFixed(1)}s`);
 
       if (!expanded || isPartial) {
@@ -678,8 +920,8 @@ export default function projectSubagents(pi: ExtensionAPI): void {
       const container = new Container();
       container.addChild(new Text(header, 0, 0));
       container.addChild(new Text(theme.fg("dim", `Why: ${details.reason}`), 0, 0));
-      container.addChild(new Text(theme.fg("dim", `Source: ${details.source} · Access: ${details.access}`), 0, 0));
-      container.addChild(new Text(theme.fg("dim", `Agent file: ${details.agentFile}`), 0, 0));
+      container.addChild(new Text(theme.fg("dim", `Profile: ${details.agent} (${details.source}) · Access: ${details.access} · ${details.model ?? "inherited model"}`), 0, 0));
+      if (details.transcriptPath) container.addChild(new Text(theme.fg("dim", `Transcript: ${details.transcriptPath}`), 0, 0));
       if (details.activities.length > 0) {
         container.addChild(new Spacer(1));
         container.addChild(new Text(theme.fg("muted", "Tool activity"), 0, 0));
@@ -706,29 +948,65 @@ export default function projectSubagents(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("subagents", {
-    description: "List available specialists, access levels, and configuration issues",
-    handler: async (_args, ctx) => {
-      if (!ctx.isProjectTrusted()) {
-        ctx.ui.notify("Specialists are unavailable until this project is trusted.", "warning");
+    description: "Subagents: list profiles and runs; /subagents stop <id|all>; /subagents report <id>",
+    handler: async (args, ctx) => {
+      lastUiContext = ctx;
+      const [action, target] = args.trim().split(/\s+/);
+      if (action === "stop") {
+        const targets = target === "all" ? running() : [runs.get(target ?? "")].filter((run): run is Run => !!run);
+        if (targets.length === 0) {
+          ctx.ui.notify(target ? `No running subagent with id ${target}.` : "Usage: /subagents stop <id|all>", "warning");
+          return;
+        }
+        for (const run of targets) run.abort.abort();
+        ctx.ui.notify(`Stopping ${targets.map((run) => run.details.name).join(", ")}…`, "info");
         return;
       }
+      if (action === "report") {
+        const run = runs.get(target ?? "");
+        if (!run) {
+          ctx.ui.notify(`No subagent with id ${target}.`, "warning");
+          return;
+        }
+        pi.sendUserMessage(completionReport(run.details), { deliverAs: ctx.isIdle() ? undefined : "followUp" });
+        return;
+      }
+
+      if (!ctx.isProjectTrusted()) {
+        ctx.ui.notify("Subagents are unavailable until this project is trusted.", "warning");
+        return;
+      }
+      const config = loadSubagentConfig();
       const discovery = discoverProjectAgents(ctx.cwd);
-      const lines = discovery.agents.map((agent) =>
-        `${agent.name} — ${agent.description} [${agent.source}, ${agent.activation}, ${agent.access}; ${agent.model}, ${agent.thinking}; ${agent.tools.join(", ") || "no tools"}]`,
-      );
+      const lines = [
+        `Policy: approval ${config.approval}, default mode ${config.defaultMode}, max ${config.maxConcurrent} concurrent, depth ${config.maxDepth}${config.enforceModel ? `, enforced model ${config.enforceModel}` : ""}`,
+        ...discovery.agents.map((agent) => `${describeProfile(agent)} — ${agent.description}`),
+      ];
+      const known = order.map((id) => runs.get(id)).filter((run): run is Run => !!run);
+      if (known.length > 0) {
+        lines.push("Runs:");
+        for (const run of known.slice(-10)) {
+          const d = run.details;
+          lines.push(`  ${d.status.padEnd(9)} ${d.name} · ${d.activities.length} tools${d.durationMs !== undefined ? ` · ${(d.durationMs / 1000).toFixed(1)}s` : ""} · ${d.runId}`);
+        }
+      }
       if (discovery.diagnostics.length > 0) lines.push(`Issues: ${discovery.diagnostics.join("; ")}`);
-      ctx.ui.notify(lines.length > 0 ? lines.join("\n") : "No valid specialists are configured.", discovery.diagnostics.length > 0 ? "warning" : "info");
+      ctx.ui.notify(lines.join("\n"), discovery.diagnostics.length > 0 ? "warning" : "info");
     },
   });
 
+  pi.on("session_shutdown", async () => {
+    for (const run of running()) run.abort.abort();
+  });
+
   pi.on("before_agent_start", (event, ctx) => {
+    lastUiContext = ctx;
     if (!ctx.isProjectTrusted()) return;
     const discovery = discoverProjectAgents(ctx.cwd);
-    if (discovery.agents.length === 0) return;
 
     const prompt = event.prompt.toLowerCase();
-    const explicitlyMentionsDelegation = /\b(?:sub[ -]?agents?|delegat(?:e|ion)|another agent)\b/.test(prompt)
-      || discovery.agents.some((agent) => prompt.includes(agent.name.toLowerCase()));
+    const explicitlyMentionsDelegation = /\b(?:sub[ -]?agents?|delegat(?:e|ion)|another agent|in the background|in parallel|worker)\b/.test(prompt)
+      || discovery.agents.some((agent) => agent.name !== WORKER_AGENT && prompt.includes(agent.name.toLowerCase()));
     if (!explicitlyMentionsDelegation && !shouldConsiderSubagent(event.prompt)) return;
 
     if (explicitlyMentionsDelegation && !pi.getActiveTools().includes("subagent")) {
@@ -740,11 +1018,13 @@ export default function projectSubagents(pi: ExtensionAPI): void {
       ? discovery.agents
       : discovery.agents.filter((agent) => agent.activation === "propose");
     if (eligible.length === 0) return;
-    const list = eligible.map((agent) =>
-      `- ${agent.name} [${agent.access}]: ${agent.description}`,
-    ).join("\n");
+    const list = eligible.map((agent) => `- ${agent.name} [${agent.access}]: ${agent.description}`).join("\n");
+    const active = running();
+    const activeLine = active.length > 0
+      ? `\nCurrently running: ${active.map((run) => `${run.details.name} (${run.details.runId})`).join(", ")}. Their reports will arrive as messages.`
+      : "";
     return {
-      systemPrompt: `${event.systemPrompt}\n\nOptional specialists available:\n${list}\n\nDelegation policy:\n- Specialists are optional, not a default workflow. Use at most one only when its expected benefit clearly exceeds coordination overhead.\n- Good uses are broad unfamiliar-code mapping, genuinely multi-source current research, or an independent review of a larger or riskier change.\n- Do not delegate straightforward questions, routine commands, simple or single-file work, work already understood, or ritual validation.\n- The separate fix_pi_workaround tool handles only recurring operational detours forced on the main Pi agent; do not use a specialist for project-code workarounds.\n- Give the specialist one narrow task and a plain one-sentence reason. The user will see both and must approve before it starts.\n- Treat the result as evidence, not authority. Check important claims yourself and keep responsibility for the final answer.`,
+      systemPrompt: `${event.systemPrompt}\n\nSubagent profiles available:\n${list}${activeLine}\n\nDelegation policy:\n- Subagents run in the background by default; you get a message beginning with [Subagent "<name>" …] when one finishes. Keep working on other parts meanwhile; do not poll or wait unless you used mode "wait".\n- Delegate work that is separable and self-contained: another feature or module, a broad investigation, an independent review, or verification. Give the child every path, command, and acceptance criterion it needs; it cannot see this conversation.\n- Do not delegate trivial steps or work that needs context you cannot write down. Avoid two children editing the same files.\n- Treat reports as evidence, not authority: check the diff and run the relevant tests before building on them.`,
     };
   });
 }

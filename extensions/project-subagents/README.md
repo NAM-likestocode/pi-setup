@@ -1,20 +1,58 @@
-# Trusted Specialists
+# Subagents
 
-A small, approval-gated Pi specialist runner that works with Pi Anywhere.
+Delegate bounded tasks to isolated child Pi processes that run **in the background**, in parallel, and can delegate further themselves.
 
 ## Default behavior
 
-- Trusted user specialists load from `~/.pi/agent/agents/`.
-- A trusted project may add explicit-use specialists in the nearest `<project>/.pi/agents/` directory.
-- Project specialists cannot replace a user specialist with the same name.
-- Pi may **propose** a user specialist only when a bounded investigation or independent review is likely to be worth the extra coordination.
-- Every run through the generic `subagent` tool shows the reason, exact task, prompt source, access level, and tools before asking for approval.
-- Only one generic child can run at a time. There are no chains, swarms, or background follow-ups.
-- Automatic repair of Pi's own operational workarounds is handled separately by `extensions/auto-workaround-fixer/`, which stages and checks global-harness changes before applying them without approval.
-- Every child run is forced to `openai-codex/gpt-5.6-sol` with `xhigh` thinking, including project-defined specialists.
-- The parent Pi agent remains responsible for checking important claims and for the final answer.
+- The `subagent` tool returns immediately; the child's report is delivered to the session as a follow-up message beginning with `[Subagent "<name>" …]` when it finishes. The parent keeps working meanwhile. Use `mode: "wait"` to block instead.
+- Up to `maxConcurrent` (default 4) children run at once; children load this extension too, so they can delegate up to `maxDepth` (default 2) levels deep.
+- **No approval prompt** by default (`approval: "never"`). Set `"approval": "always"` in `~/.pi/agent/subagents.json` to restore the confirm dialog (local TUI and Pi Anywhere).
+- The built-in `worker` profile is always available: read, bash, edit, write, grep, find, ls, plus web tools when `pi-web-access` is installed. Named specialists load from `~/.pi/agent/agents/*.md` and `<project>/.pi/agents/*.md`.
+- Any call may override `tools`, `model`, `thinking`, add `instructions`, set `cwd`, and give the run a `name`.
+- Profiles use their own frontmatter `model` / `thinking`; without one they **inherit the parent session's**. The old global policy is opt-in via `enforceModel` / `enforceThinking`.
+- Each child's full `--mode json` event stream is written to `<transcriptDir>/<runId>.jsonl` (default `~/.local/state/pi/subagents/`), bracketed by `subagent_start` / `subagent_exit` lines. Front-ends (pi-desk) tail these to show live transcripts.
+- Children run with `--no-extensions` plus: provider auth packages (auto-detected `*-auth` packages, so subscription auth keeps working), this extension (for nesting), and the web extension when the profile has the `web` capability.
+- The parent remains responsible for checking important claims: reports say so explicitly.
 
-## Default generic roster
+## `~/.pi/agent/subagents.json`
+
+All keys optional:
+
+```json
+{
+  "approval": "never",
+  "defaultModel": "inherit",
+  "defaultThinking": "inherit",
+  "enforceModel": "openai-codex/gpt-5.6-sol",
+  "enforceThinking": "xhigh",
+  "maxConcurrent": 4,
+  "maxDepth": 2,
+  "defaultMode": "background",
+  "transcriptDir": "~/.local/state/pi/subagents",
+  "childExtensions": ["~/.pi/agent/npm/node_modules/@gotgenes/pi-anthropic-auth/src/index.ts"]
+}
+```
+
+`childExtensions` replaces the auto-detected auth list when given.
+
+## Tool parameters
+
+| Parameter | Meaning |
+|---|---|
+| `task` (required) | Self-contained task with paths, commands and acceptance criteria. The child does not see the conversation. |
+| `reason` (required) | One sentence on why delegating is worthwhile. |
+| `agent` | Profile: `worker` (default) or a named specialist. |
+| `name` | Label for the run (status bar, reports, pi-desk). |
+| `mode` | `background` (default) or `wait`. |
+| `tools`, `model`, `thinking`, `instructions`, `cwd` | Per-run overrides. |
+
+## Commands
+
+- `/subagents` — policy, profiles, recent runs.
+- `/subagents stop <id|all>` — cancel running children.
+- `/subagents report <id>` — re-inject a run's report into the session.
+
+## Named specialists
 
 | Specialist | Use when | Access |
 |---|---|---|
@@ -22,21 +60,9 @@ A small, approval-gated Pi specialist runner that works with Pi Anywhere.
 | `researcher` | A decision genuinely needs several current or authoritative web sources | Network research only |
 | `reviewer` | A larger or riskier change benefits from an independent check | Read-only project files |
 
-Do not use a specialist for simple questions, routine commands, single-file work, work already understood, ritual review, or project-code workarounds. Definitions marked `automatic: true` and `scope: pi-harness`, including `agents/workaround-fixer.md`, are excluded from generic discovery. The always-active `fix_pi_workaround` tool is their only execution path.
+Their frontmatter currently pins `openai-codex/gpt-5.6-sol`; remove the `model:` line to inherit the parent's model instead. Definitions marked `automatic: true` and `scope: pi-harness` (`agents/workaround-fixer.md`) are excluded from discovery; `extensions/auto-workaround-fixer/` runs that one itself and still uses `ENFORCED_SUBAGENT_MODEL`.
 
-## Child isolation
-
-Each run starts an ephemeral Pi process with:
-
-- no session;
-- no normal extension discovery;
-- no skills or prompt templates;
-- only the tools declared by the specialist;
-- only approved child capabilities. Currently, the built-in `web` capability maps to the pinned `pi-web-access` extension for trusted user specialists.
-
-Supported built-in tools are `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`. Generic proposal-enabled specialists intentionally have no editing or shell access. The separate automatic runner reads its dedicated definition directly, adds a path guard, removes arbitrary shell access, works in a staged copy, and applies changes only after restricted validation. Agent-level model or thinking settings cannot override the enforced `gpt-5.6-sol`/`xhigh` policy.
-
-## Define an explicit project specialist
+## Define a project specialist
 
 Create `<project>/.pi/agents/domain-expert.md`:
 
@@ -45,18 +71,13 @@ Create `<project>/.pi/agents/domain-expert.md`:
 name: domain-expert
 description: Explains this project's billing rules and edge cases
 tools: read, grep, find, ls
-model: openai-codex/gpt-5.6-sol
-thinking: xhigh
 ---
 
 Answer only the delegated billing question. Cite the relevant project files.
-Keep the result short and identify uncertainty clearly.
 ```
 
-Project specialists are always explicit-request only, even if their frontmatter says `activation: propose`. They cannot request extra child extensions.
-
-Run `/subagents` to list the generic roster, access levels, and configuration issues. Use `/delegation off` to disable new generic runs for the session; use `/workaround-fixer off` to disable automatic Pi self-repair for that session.
+Project specialists are explicit-request only and cannot request extra child capabilities. A project cannot redefine `worker` or a user specialist.
 
 ## Anywhere integration
 
-The extension sends approval and lifecycle status to Pi Anywhere. The dashboard shows commands, changed paths, and success or failure while redacting secret-shaped values and hiding previews for common sensitive files. Raw tool output is not mirrored.
+Lifecycle and tool activity are still emitted on the dashboard channel (commands, changed paths, success/failure; secrets redacted, raw output not mirrored). The remote approval prompt is used only when `approval` is `"always"`.

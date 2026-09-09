@@ -2,7 +2,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverProjectAgents } from "../extensions/project-subagents/agents.ts";
+import {
+  applyOverrides,
+  defaultConfig,
+  detectAuthExtensions,
+  discoverProjectAgents,
+  loadSubagentConfig,
+  WORKER_AGENT,
+} from "../extensions/project-subagents/agents.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -16,14 +23,19 @@ function agentFile(frontmatter: string, body: string): string {
   return `---\n${frontmatter}\n---\n\n${body}\n`;
 }
 
+/** Discovery with an empty, non-existent config file so host settings never leak into tests. */
+function discover(cwd: string, options: Parameters<typeof discoverProjectAgents>[1] = {}) {
+  return discoverProjectAgents(cwd, { ...options, config: { ...defaultConfig(), childExtensions: [], ...(options.config ?? {}) } });
+}
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
-describe("trusted specialist discovery", () => {
-  it("loads proposal-enabled user specialists and approved web capability", () => {
+describe("subagent profile discovery", () => {
+  it("always offers the built-in worker and loads user specialists with their own model and thinking", () => {
     const root = tempDirectory();
     const userAgentsDir = join(root, "user-agents");
     const project = join(root, "project");
@@ -35,7 +47,7 @@ describe("trusted specialist discovery", () => {
       "Inspect only the delegated area.",
     ));
     writeFileSync(join(userAgentsDir, "researcher.md"), agentFile(
-      "name: researcher\ndescription: Researches the web\ntools: web_search, source_check\nactivation: propose\ncapabilities: web\nmodel: openai-codex/gpt-5.6-sol\nthinking: xhigh",
+      "name: researcher\ndescription: Researches the web\ntools: web_search, source_check\nactivation: propose\ncapabilities: web",
       "Use strong sources.",
     ));
     writeFileSync(join(userAgentsDir, "workaround-fixer.md"), agentFile(
@@ -43,12 +55,9 @@ describe("trusted specialist discovery", () => {
       "Operate only through the dedicated automatic runner.",
     ));
 
-    const discovery = discoverProjectAgents(project, {
-      userAgentsDir,
-      webExtensionPath: join(root, "approved-web.ts"),
-    });
+    const discovery = discover(project, { userAgentsDir, webExtensionPath: join(root, "approved-web.ts") });
 
-    expect(discovery.agents.map((agent) => agent.name)).toEqual(["researcher", "scout"]);
+    expect(discovery.agents.map((agent) => agent.name)).toEqual([WORKER_AGENT, "researcher", "scout"]);
     expect(discovery.agents.find((agent) => agent.name === "scout")).toMatchObject({
       source: "user",
       activation: "propose",
@@ -57,17 +66,34 @@ describe("trusted specialist discovery", () => {
       thinking: "xhigh",
       extensionPaths: [],
     });
+    // No model/thinking in frontmatter → inherit the parent's.
     expect(discovery.agents.find((agent) => agent.name === "researcher")).toMatchObject({
-      source: "user",
-      activation: "propose",
       access: "network",
-      model: "openai-codex/gpt-5.6-sol",
-      thinking: "xhigh",
+      model: "inherit",
+      thinking: "inherit",
       extensionPaths: [join(root, "approved-web.ts")],
     });
+    expect(discovery.diagnostics).toEqual([]);
   });
 
-  it("keeps project specialists explicit and prevents them replacing trusted user agents", () => {
+  it("gives the built-in worker full tools, write access, and web tools only when the web extension exists", () => {
+    const root = tempDirectory();
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const webPath = join(root, "web.ts");
+
+    const without = discover(project, { userAgentsDir: join(root, "none"), webExtensionPath: webPath }).agents[0];
+    expect(without).toMatchObject({ name: WORKER_AGENT, source: "builtin", access: "write", capabilities: [], extensionPaths: [] });
+    expect(without.tools).toEqual(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+
+    writeFileSync(webPath, "export default () => {}");
+    const withWeb = discover(project, { userAgentsDir: join(root, "none"), webExtensionPath: webPath }).agents[0];
+    expect(withWeb.capabilities).toEqual(["web"]);
+    expect(withWeb.tools).toContain("web_search");
+    expect(withWeb.extensionPaths).toEqual([webPath]);
+  });
+
+  it("keeps project specialists explicit and prevents them replacing trusted user agents or the worker", () => {
     const root = tempDirectory();
     const userAgentsDir = join(root, "user-agents");
     const project = join(root, "project");
@@ -75,58 +101,124 @@ describe("trusted specialist discovery", () => {
     mkdirSync(userAgentsDir, { recursive: true });
     mkdirSync(projectAgentsDir, { recursive: true });
 
-    writeFileSync(join(userAgentsDir, "scout.md"), agentFile(
-      "name: scout\ndescription: Trusted scout\nactivation: propose",
-      "Map the requested code.",
-    ));
-    writeFileSync(join(projectAgentsDir, "duplicate.md"), agentFile(
-      "name: scout\ndescription: Project replacement\ntools: edit, write",
-      "Replace the global scout.",
-    ));
+    writeFileSync(join(userAgentsDir, "scout.md"), agentFile("name: scout\ndescription: Trusted scout\nactivation: propose", "Map the requested code."));
+    writeFileSync(join(projectAgentsDir, "duplicate.md"), agentFile("name: scout\ndescription: Project replacement\ntools: edit, write", "Replace the global scout."));
+    writeFileSync(join(projectAgentsDir, "worker.md"), agentFile("name: worker\ndescription: Replace the worker\ntools: bash", "Nope."));
     writeFileSync(join(projectAgentsDir, "domain.md"), agentFile(
       "name: domain-expert\ndescription: Project expert\ntools: read, edit, web_search\nactivation: propose\ncapabilities: web",
       "Handle only explicit project tasks.",
     ));
 
-    const discovery = discoverProjectAgents(project, {
-      userAgentsDir,
-      webExtensionPath: join(root, "approved-web.ts"),
-    });
+    const discovery = discover(project, { userAgentsDir, webExtensionPath: join(root, "approved-web.ts") });
     const domain = discovery.agents.find((agent) => agent.name === "domain-expert");
 
     expect(discovery.agents.filter((agent) => agent.name === "scout")).toHaveLength(1);
-    expect(domain).toMatchObject({
-      source: "project",
-      activation: "explicit",
-      access: "write",
-      capabilities: [],
-      tools: ["read", "edit"],
-      model: "openai-codex/gpt-5.6-sol",
-      thinking: "xhigh",
-      extensionPaths: [],
-    });
+    expect(discovery.agents.filter((agent) => agent.name === WORKER_AGENT)).toHaveLength(1);
+    expect(discovery.agents.find((agent) => agent.name === WORKER_AGENT)?.source).toBe("builtin");
+    expect(domain).toMatchObject({ source: "project", activation: "explicit", access: "write", capabilities: [], tools: ["read", "edit"] });
     expect(discovery.diagnostics.some((message) => message.includes("cannot replace the trusted user agent"))).toBe(true);
     expect(discovery.diagnostics.some((message) => message.includes("cannot load extra child capabilities"))).toBe(true);
+    expect(discovery.diagnostics.some((message) => message.includes("built-in profile and cannot be redefined"))).toBe(true);
   });
 
-  it("enforces the global model and thinking policy over agent frontmatter", () => {
+  it("enforces a global model and thinking only when configured", () => {
     const root = tempDirectory();
     const userAgentsDir = join(root, "user-agents");
     const project = join(root, "project");
     mkdirSync(userAgentsDir, { recursive: true });
     mkdirSync(project, { recursive: true });
-
     writeFileSync(join(userAgentsDir, "custom.md"), agentFile(
       "name: custom\ndescription: Requests a different model\nmodel: another-provider/another-model\nthinking: medium\nactivation: propose",
       "Inspect only the delegated task.",
     ));
 
-    const discovery = discoverProjectAgents(project, { userAgentsDir });
+    const free = discover(project, { userAgentsDir });
+    expect(free.agents.find((agent) => agent.name === "custom")).toMatchObject({ model: "another-provider/another-model", thinking: "medium" });
+    expect(free.diagnostics).toEqual([]);
 
-    expect(discovery.agents[0]).toMatchObject({
-      model: "openai-codex/gpt-5.6-sol",
-      thinking: "xhigh",
-    });
-    expect(discovery.diagnostics.filter((message) => message.includes("overridden by global policy"))).toHaveLength(2);
+    const enforced = discover(project, { userAgentsDir, config: { enforceModel: "openai-codex/gpt-5.6-sol", enforceThinking: "xhigh" } });
+    expect(enforced.agents.find((agent) => agent.name === "custom")).toMatchObject({ model: "openai-codex/gpt-5.6-sol", thinking: "xhigh" });
+    expect(enforced.agents[0]).toMatchObject({ name: WORKER_AGENT, model: "openai-codex/gpt-5.6-sol", thinking: "xhigh" });
+    expect(enforced.diagnostics.filter((message) => message.includes("overridden by enforce"))).toHaveLength(2);
+  });
+});
+
+describe("run overrides", () => {
+  it("lets a call restrict tools, pick a model and add instructions without touching the profile", () => {
+    const root = tempDirectory();
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const config = defaultConfig();
+    const worker = discover(project, { userAgentsDir: join(root, "none"), webExtensionPath: join(root, "missing.ts") }).agents[0];
+
+    const diagnostics: string[] = [];
+    const run = applyOverrides(worker, {
+      tools: ["read", "grep", "web_search"],
+      model: "anthropic/claude-haiku-4-5",
+      thinking: "low",
+      instructions: "Use tabs.",
+    }, config, diagnostics);
+
+    expect(run.tools).toEqual(["read", "grep"]);
+    expect(run.access).toBe("read-only");
+    expect(run.model).toBe("anthropic/claude-haiku-4-5");
+    expect(run.thinking).toBe("low");
+    expect(run.systemPrompt).toContain("Use tabs.");
+    expect(run.source).toBe("adhoc");
+    expect(worker.tools).toHaveLength(7);
+    expect(diagnostics.some((message) => message.includes("web_search"))).toBe(true);
+
+    const bad: string[] = [];
+    expect(applyOverrides(worker, { model: "not-a-model", thinking: "ultra" }, config, bad)).toMatchObject({ model: "inherit", thinking: "inherit" });
+    expect(bad).toHaveLength(2);
+  });
+});
+
+describe("child auth extensions", () => {
+  it("detects installed *-auth packages and their extension entries", () => {
+    const root = tempDirectory();
+    const nm = join(root, "node_modules");
+    mkdirSync(join(nm, "@vendor", "pi-anthropic-auth", "src"), { recursive: true });
+    mkdirSync(join(nm, "pi-web-access"), { recursive: true });
+    mkdirSync(join(nm, "author-tools"), { recursive: true });
+    writeFileSync(join(nm, "@vendor", "pi-anthropic-auth", "package.json"), JSON.stringify({ name: "@vendor/pi-anthropic-auth", pi: { extensions: ["./src/index.ts"] } }));
+    writeFileSync(join(nm, "@vendor", "pi-anthropic-auth", "src", "index.ts"), "export default () => {}");
+    writeFileSync(join(nm, "pi-web-access", "package.json"), JSON.stringify({ name: "pi-web-access", pi: { extensions: ["./index.ts"] } }));
+    writeFileSync(join(nm, "pi-web-access", "index.ts"), "export default () => {}");
+    writeFileSync(join(nm, "author-tools", "package.json"), JSON.stringify({ name: "author-tools", pi: { extensions: ["./index.ts"] } }));
+    writeFileSync(join(nm, "author-tools", "index.ts"), "export default () => {}");
+
+    expect(detectAuthExtensions(nm)).toEqual([join(nm, "@vendor", "pi-anthropic-auth", "src", "index.ts")]);
+    expect(detectAuthExtensions(join(root, "missing"))).toEqual([]);
+  });
+
+  it("finds the real pi-anthropic-auth package on this machine when installed", () => {
+    const found = detectAuthExtensions();
+    for (const path of found) expect(path).toMatch(/auth/i);
+  });
+});
+
+describe("subagent config", () => {
+  it("reads ~/.pi/agent/subagents.json over sane defaults and ignores invalid values", () => {
+    const root = tempDirectory();
+    const path = join(root, "subagents.json");
+    expect(loadSubagentConfig({}, path)).toMatchObject({ approval: "never", defaultModel: "inherit", defaultMode: "background", maxConcurrent: 4, maxDepth: 2 });
+
+    writeFileSync(path, JSON.stringify({
+      approval: "always",
+      defaultModel: "anthropic/claude-haiku-4-5",
+      defaultThinking: "bogus",
+      maxConcurrent: 2.7,
+      maxDepth: -1,
+      defaultMode: "wait",
+      transcriptDir: "~/.cache/pi-subagents",
+    }));
+    const loaded = loadSubagentConfig({}, path);
+    expect(loaded).toMatchObject({ approval: "always", defaultModel: "anthropic/claude-haiku-4-5", defaultThinking: "inherit", maxConcurrent: 2, maxDepth: 2, defaultMode: "wait" });
+    expect(loaded.transcriptDir.endsWith("/.cache/pi-subagents")).toBe(true);
+    expect(loaded.transcriptDir.startsWith("~")).toBe(false);
+
+    writeFileSync(path, "{ not json");
+    expect(loadSubagentConfig({}, path).approval).toBe("never");
   });
 });
