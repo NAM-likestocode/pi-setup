@@ -8,7 +8,10 @@ import {
   detectAuthExtensions,
   discoverProjectAgents,
   loadSubagentConfig,
+  poolEntry,
+  poolFallbackOrder,
   WORKER_AGENT,
+  type PoolModel,
 } from "../extensions/project-subagents/agents.ts";
 
 const temporaryDirectories: string[] = [];
@@ -195,6 +198,62 @@ describe("child auth extensions", () => {
   it("finds the real pi-anthropic-auth package on this machine when installed", () => {
     const found = detectAuthExtensions();
     for (const path of found) expect(path).toMatch(/auth/i);
+  });
+});
+
+describe("model pool", () => {
+  const pool: PoolModel[] = [
+    { label: "opus", id: "anthropic/claude-opus-5", thinking: "xhigh", use: "implementation" },
+    { label: "luna", id: "openai-codex/gpt-5.6-luna", thinking: "max", use: "deep thinking" },
+  ];
+
+  it("routes every child onto a pool model, by label or id, defaulting to the first entry", () => {
+    const root = tempDirectory();
+    const userAgentsDir = join(root, "user-agents");
+    const project = join(root, "project");
+    mkdirSync(userAgentsDir, { recursive: true });
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(userAgentsDir, "scout.md"), agentFile("name: scout\ndescription: Maps code\nmodel: openai-codex/gpt-5.6-sol\nactivation: propose", "Map."));
+    writeFileSync(join(userAgentsDir, "thinker.md"), agentFile("name: thinker\ndescription: Thinks\nmodel: luna\nactivation: propose", "Think."));
+
+    const discovery = discover(project, { userAgentsDir, config: { models: pool } });
+    expect(discovery.agents.find((agent) => agent.name === WORKER_AGENT)?.model).toBe("anthropic/claude-opus-5");
+    expect(discovery.agents.find((agent) => agent.name === "scout")?.model).toBe("anthropic/claude-opus-5");
+    expect(discovery.agents.find((agent) => agent.name === "thinker")?.model).toBe("openai-codex/gpt-5.6-luna");
+    expect(discovery.diagnostics.some((message) => message.includes("not in the subagent model pool"))).toBe(true);
+
+    const config = { ...defaultConfig(), childExtensions: [], models: pool };
+    const worker = discovery.agents[0];
+    const diagnostics: string[] = [];
+    expect(applyOverrides(worker, { model: "LUNA" }, config, diagnostics).model).toBe("openai-codex/gpt-5.6-luna");
+    expect(applyOverrides(worker, { model: "anthropic/claude-opus-5" }, config, diagnostics).model).toBe("anthropic/claude-opus-5");
+    expect(applyOverrides(worker, { model: "anthropic/claude-haiku-4-5" }, config, diagnostics).model).toBe("anthropic/claude-opus-5");
+    expect(diagnostics).toHaveLength(1);
+  });
+
+  it("matches labels case-insensitively and orders fallbacks from the chosen entry", () => {
+    expect(poolEntry(pool, "Luna")?.id).toBe("openai-codex/gpt-5.6-luna");
+    expect(poolEntry(pool, "anthropic/claude-opus-5")?.label).toBe("opus");
+    expect(poolEntry(pool, "nope")).toBeUndefined();
+    expect(poolFallbackOrder(pool, "openai-codex/gpt-5.6-luna").map((entry) => entry.label)).toEqual(["luna", "opus"]);
+    expect(poolFallbackOrder(pool, "x").map((entry) => entry.label)).toEqual(["opus", "luna"]);
+  });
+
+  it("parses the pool from config and drops malformed entries", () => {
+    const root = tempDirectory();
+    const path = join(root, "subagents.json");
+    writeFileSync(path, JSON.stringify({ models: [
+      { label: "opus", id: "anthropic/claude-opus-5", thinking: "xhigh", use: "code" },
+      { label: "opus", id: "anthropic/claude-opus-4-8" },
+      { label: "bad id", id: "no-slash" },
+      { id: "openai-codex/gpt-5.6-luna" },
+      { label: "luna", id: "openai-codex/gpt-5.6-luna", thinking: "ultra" },
+    ] }));
+    const loaded = loadSubagentConfig({}, path);
+    expect(loaded.models).toEqual([
+      { label: "opus", id: "anthropic/claude-opus-5", thinking: "xhigh", use: "code" },
+      { label: "luna", id: "openai-codex/gpt-5.6-luna", thinking: undefined, use: "" },
+    ]);
   });
 });
 

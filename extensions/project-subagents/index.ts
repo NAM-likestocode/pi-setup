@@ -41,7 +41,10 @@ import {
   applyOverrides,
   discoverProjectAgents,
   loadSubagentConfig,
+  poolEntry,
+  poolFallbackOrder,
   WORKER_AGENT,
+  type PoolModel,
   type ProjectAgent,
   type RunMode,
   type SubagentConfig,
@@ -244,6 +247,42 @@ function summaryFromActivity(activity: DashboardActivity): ActivitySummary {
 function currentDepth(): number {
   const raw = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+}
+
+/** Describe the model pool for the tool description / system prompt. */
+function describePool(pool: PoolModel[]): string {
+  return pool.map((entry) => `"${entry.label}" = ${entry.id}${entry.thinking ? ` (thinking ${entry.thinking})` : ""}: ${entry.use || "no guidance"}`).join("; ");
+}
+
+interface ResolvedModel {
+  model?: string;
+  thinking?: string;
+  note?: string;
+}
+
+/**
+ * Final model + thinking for a run. With a pool, prefer the chosen entry but skip
+ * providers that have no configured auth in this session (falling through the
+ * pool in order); the pool entry's thinking wins when it sets one.
+ */
+function resolveRunModel(ctx: ExtensionContext, pi: ExtensionAPI, agent: ProjectAgent, config: SubagentConfig): ResolvedModel {
+  const inherit = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+  const baseThinking = agent.thinking === "inherit" ? pi.getThinkingLevel() : agent.thinking;
+  const chosen = agent.model === "inherit" ? inherit : agent.model;
+
+  if (config.models.length === 0) return { model: chosen, thinking: baseThinking };
+
+  const wanted = poolEntry(config.models, chosen) ?? config.models[0];
+  for (const entry of poolFallbackOrder(config.models, wanted.id)) {
+    const [provider, ...rest] = entry.id.split("/");
+    const model = ctx.modelRegistry.find(provider, rest.join("/"));
+    const authed = model ? ctx.modelRegistry.hasConfiguredAuth(model) : false;
+    if (!authed) continue;
+    const note = entry.id !== wanted.id ? `${wanted.label} (${wanted.id}) has no configured auth; used ${entry.label} instead` : undefined;
+    return { model: entry.id, thinking: entry.thinking ?? baseThinking, note };
+  }
+  // Nothing in the pool is usable: fall back to the parent's own model so the run still starts.
+  return { model: inherit, thinking: baseThinking, note: `no model in the subagent pool has configured auth; used the parent's model ${inherit ?? "(unknown)"}` };
 }
 
 function describeProfile(agent: ProjectAgent): string {
@@ -600,7 +639,7 @@ const SubagentParams = Type.Object({
   name: Type.Optional(Type.String({ maxLength: 60, description: "Short label for this run, e.g. \"auth-feature\" (defaults to the profile name)" })),
   mode: Type.Optional(Type.Union([Type.Literal("background"), Type.Literal("wait")], { description: "background (default): return immediately, the report arrives later as a message. wait: block until the child finishes and return its report." })),
   tools: Type.Optional(Type.Array(Type.String(), { description: "Restrict or change the child's tools (subset of read, bash, edit, write, grep, find, ls, and web tools when available)" })),
-  model: Type.Optional(Type.String({ description: "Override model as provider/id, e.g. anthropic/claude-haiku-4-5" })),
+  model: Type.Optional(Type.String({ description: "Which model the child runs on. Choose per task from the pool listed in the tool description (use its short label), or give provider/id when no pool is configured." })),
   thinking: Type.Optional(Type.String({ description: "Override thinking level: off, minimal, low, medium, high, xhigh, max" })),
   instructions: Type.Optional(Type.String({ maxLength: 4000, description: "Extra system-prompt instructions for this run (conventions, constraints, style)" })),
   cwd: Type.Optional(Type.String({ description: "Working directory for the child (absolute, or relative to the current one)" })),
@@ -743,12 +782,16 @@ export default function projectSubagents(pi: ExtensionAPI): void {
     return run;
   }
 
-  if (depth >= loadSubagentConfig().maxDepth) return;
+  const startupConfig = loadSubagentConfig();
+  if (depth >= startupConfig.maxDepth) return;
+  const poolText = startupConfig.models.length > 0
+    ? ` Model pool — pick one per task with the "model" parameter: ${describePool(startupConfig.models)}. If you omit it, "${startupConfig.models[0].label}" is used.`
+    : "";
 
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: `Delegate a bounded task to an isolated child Pi that runs in the background while you continue. Default profile "${WORKER_AGENT}" has full tools; named specialists may also be available. The child does not see this conversation, so put everything it needs into the task. Its report arrives later as a message beginning with [Subagent "<name>" …]; use mode "wait" if you need the result before you can continue.`,
+    description: `Delegate a bounded task to an isolated child Pi that runs in the background while you continue. Default profile "${WORKER_AGENT}" has full tools; named specialists may also be available. The child does not see this conversation, so put everything it needs into the task. Its report arrives later as a message beginning with [Subagent "<name>" …]; use mode "wait" if you need the result before you can continue.${poolText}`,
     promptSnippet: "Delegate separable work to background subagents and keep working meanwhile",
     promptGuidelines: [
       "Use subagent for work that can proceed independently: implementing a separate feature or module, a broad investigation, a review, or verification that would otherwise block you.",
@@ -796,9 +839,10 @@ export default function projectSubagents(pi: ExtensionAPI): void {
       try { isDir = statSync(cwd).isDirectory(); } catch { isDir = false; }
       if (!isDir) throw new Error(`Working directory does not exist: ${cwd}`);
 
-      const inheritModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-      const model = agent.model === "inherit" ? inheritModel : agent.model;
-      const thinking = agent.thinking === "inherit" ? pi.getThinkingLevel() : agent.thinking;
+      const resolved = resolveRunModel(ctx, pi, agent, config);
+      const model = resolved.model;
+      const thinking = resolved.thinking;
+      if (resolved.note) diagnostics.push(resolved.note);
       const mode: RunMode = params.mode ?? config.defaultMode;
       const runId = `subagent-${toolCallId || randomUUID()}`;
       const name = params.name?.trim() || agent.name;
@@ -980,6 +1024,7 @@ export default function projectSubagents(pi: ExtensionAPI): void {
       const discovery = discoverProjectAgents(ctx.cwd);
       const lines = [
         `Policy: approval ${config.approval}, default mode ${config.defaultMode}, max ${config.maxConcurrent} concurrent, depth ${config.maxDepth}${config.enforceModel ? `, enforced model ${config.enforceModel}` : ""}`,
+        ...(config.models.length > 0 ? [`Model pool: ${describePool(config.models)}`] : []),
         ...discovery.agents.map((agent) => `${describeProfile(agent)} — ${agent.description}`),
       ];
       const known = order.map((id) => runs.get(id)).filter((run): run is Run => !!run);
@@ -1019,12 +1064,16 @@ export default function projectSubagents(pi: ExtensionAPI): void {
       : discovery.agents.filter((agent) => agent.activation === "propose");
     if (eligible.length === 0) return;
     const list = eligible.map((agent) => `- ${agent.name} [${agent.access}]: ${agent.description}`).join("\n");
+    const config = loadSubagentConfig();
+    const poolLine = config.models.length > 0
+      ? `\nModels for children (pass the label as "model"): ${describePool(config.models)}.`
+      : "";
     const active = running();
     const activeLine = active.length > 0
       ? `\nCurrently running: ${active.map((run) => `${run.details.name} (${run.details.runId})`).join(", ")}. Their reports will arrive as messages.`
       : "";
     return {
-      systemPrompt: `${event.systemPrompt}\n\nSubagent profiles available:\n${list}${activeLine}\n\nDelegation policy:\n- Subagents run in the background by default; you get a message beginning with [Subagent "<name>" …] when one finishes. Keep working on other parts meanwhile; do not poll or wait unless you used mode "wait".\n- Delegate work that is separable and self-contained: another feature or module, a broad investigation, an independent review, or verification. Give the child every path, command, and acceptance criterion it needs; it cannot see this conversation.\n- Do not delegate trivial steps or work that needs context you cannot write down. Avoid two children editing the same files.\n- Treat reports as evidence, not authority: check the diff and run the relevant tests before building on them.`,
+      systemPrompt: `${event.systemPrompt}\n\nSubagent profiles available:\n${list}${poolLine}${activeLine}\n\nDelegation policy:\n- Subagents run in the background by default; you get a message beginning with [Subagent "<name>" …] when one finishes. Keep working on other parts meanwhile; do not poll or wait unless you used mode "wait".\n- Delegate work that is separable and self-contained: another feature or module, a broad investigation, an independent review, or verification. Give the child every path, command, and acceptance criterion it needs; it cannot see this conversation.\n- Do not delegate trivial steps or work that needs context you cannot write down. Avoid two children editing the same files.\n- Treat reports as evidence, not authority: check the diff and run the relevant tests before building on them.${config.models.length > 0 ? "\n- Choose the child's model deliberately per task using the pool guidance above." : ""}`,
     };
   });
 }

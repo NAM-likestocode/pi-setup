@@ -1,0 +1,20 @@
+{
+  "approval": "never",
+  "defaultMode": "background",
+  "maxConcurrent": 4,
+  "maxDepth": 2,
+  "models": [
+    {
+      "label": "opus",
+      "id": "anthropic/claude-opus-5",
+      "thinking": "xhigh",
+      "use": "implementation and hands-on work in the repo: writing or editing code, running commands and tests, fixing failures, refactors, anything that touches files"
+    },
+    {
+      "label": "luna",
+      "id": "openai-codex/gpt-5.6-luna",
+      "thinking": "max",
+      "use": "deep thinking without much tool use: architecture and design questions, tricky debugging analysis, independent code review, research and evidence-weighing, long reasoning chains"
+    }
+  ]
+}

@@ -14,6 +14,15 @@ Delegate bounded tasks to isolated child Pi processes that run **in the backgrou
 - Children run with `--no-extensions` plus: provider auth packages (auto-detected `*-auth` packages, so subscription auth keeps working), this extension (for nesting), and the web extension when the profile has the `web` capability.
 - The parent remains responsible for checking important claims: reports say so explicitly.
 
+## Model pool
+
+`models` in `subagents.json` lists the models children may run on. The parent picks one **per task**
+by its `label` (the `use` text is shown to it as guidance); an omitted or out-of-pool model becomes the
+first entry. If the chosen provider has no configured auth in the session, the next pool entry is
+used and the tool result says so. Current pool: `opus` (`anthropic/claude-opus-5`, xhigh) for
+hands-on implementation, `luna` (`openai-codex/gpt-5.6-luna`, max) for deep reasoning, review and
+research. Leave `models` empty to go back to per-profile / inherited models.
+
 ## `~/.pi/agent/subagents.json`
 
 All keys optional:
@@ -23,6 +32,10 @@ All keys optional:
   "approval": "never",
   "defaultModel": "inherit",
   "defaultThinking": "inherit",
+  "models": [
+    { "label": "opus", "id": "anthropic/claude-opus-5", "thinking": "xhigh", "use": "implementation, editing, running tests" },
+    { "label": "luna", "id": "openai-codex/gpt-5.6-luna", "thinking": "max", "use": "deep analysis, review, research" }
+  ],
   "enforceModel": "openai-codex/gpt-5.6-sol",
   "enforceThinking": "xhigh",
   "maxConcurrent": 4,
@@ -44,7 +57,8 @@ All keys optional:
 | `agent` | Profile: `worker` (default) or a named specialist. |
 | `name` | Label for the run (status bar, reports, pi-desk). |
 | `mode` | `background` (default) or `wait`. |
-| `tools`, `model`, `thinking`, `instructions`, `cwd` | Per-run overrides. |
+| `model` | Pool label (`opus` / `luna`) chosen per task; `provider/id` when no pool is configured. |
+| `tools`, `thinking`, `instructions`, `cwd` | Per-run overrides. |
 
 ## Commands
 

@@ -59,6 +59,13 @@ export interface SubagentConfig {
   defaultModel: string;
   /** Thinking level for profiles that do not set one. `"inherit"` = the parent's level. */
   defaultThinking: AgentThinking | "inherit";
+  /**
+   * Allowed models for children, in priority order. When non-empty, every child
+   * runs on one of these: the parent picks by `label` per task (guided by `use`),
+   * profile/param models outside the pool fall back to the first entry, and a
+   * provider without configured auth is skipped for the next entry.
+   */
+  models: PoolModel[];
   /** Force every child onto one model regardless of profile/params (the old global policy). */
   enforceModel?: string;
   /** Force every child onto one thinking level regardless of profile/params. */
@@ -78,6 +85,18 @@ export interface SubagentConfig {
    * `*-auth` packages under `~/.pi/agent/npm/node_modules`.
    */
   childExtensions: string[];
+}
+
+/** One entry of the model pool: a model the parent may pick for a child, with guidance on when. */
+export interface PoolModel {
+  /** Short handle used in the tool's `model` parameter (e.g. "luna"). */
+  label: string;
+  /** `provider/id`. */
+  id: string;
+  /** Thinking level for this model; omitted = the run's normal resolution. */
+  thinking?: AgentThinking;
+  /** When the parent should choose it. Shown verbatim in the tool description. */
+  use: string;
 }
 
 export interface AgentDiscoveryOptions {
@@ -152,6 +171,7 @@ export function defaultConfig(): SubagentConfig {
     approval: "never",
     defaultModel: "inherit",
     defaultThinking: "inherit",
+    models: [],
     maxConcurrent: 4,
     maxDepth: 2,
     defaultMode: "background",
@@ -195,6 +215,7 @@ export function loadSubagentConfig(overrides: Partial<SubagentConfig> = {}, conf
   if (merged.approval === "always" || merged.approval === "never") config.approval = merged.approval;
   if (merged.defaultModel === "inherit" || isModelId(merged.defaultModel)) config.defaultModel = merged.defaultModel as string;
   if (merged.defaultThinking === "inherit" || isThinkingLevel(merged.defaultThinking)) config.defaultThinking = merged.defaultThinking as AgentThinking | "inherit";
+  config.models = parsePool(merged.models);
   if (isModelId(merged.enforceModel)) config.enforceModel = merged.enforceModel;
   if (isThinkingLevel(merged.enforceThinking)) config.enforceThinking = merged.enforceThinking;
   if (typeof merged.maxConcurrent === "number" && merged.maxConcurrent >= 1) config.maxConcurrent = Math.floor(merged.maxConcurrent);
@@ -272,11 +293,58 @@ export function accessFor(tools: string[], capabilities: AgentCapability[]): Age
   return "read-only";
 }
 
-/** Apply the model / thinking policy from config to a requested value. */
+const POOL_LABEL = /^[a-z0-9][a-z0-9_-]{0,31}$/i;
+
+function parsePool(value: unknown): PoolModel[] {
+  if (!Array.isArray(value)) return [];
+  const pool: PoolModel[] = [];
+  const labels = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const id = stringValue(record.id);
+    const label = stringValue(record.label)?.toLowerCase();
+    if (!id || !isModelId(id) || !label || !POOL_LABEL.test(label) || labels.has(label)) continue;
+    labels.add(label);
+    pool.push({
+      label,
+      id,
+      thinking: isThinkingLevel(record.thinking) ? record.thinking : undefined,
+      use: stringValue(record.use) ?? "",
+    });
+  }
+  return pool;
+}
+
+/** Match a requested model (pool label, or provider/id) against the pool. */
+export function poolEntry(pool: PoolModel[], requested: string | undefined): PoolModel | undefined {
+  if (!requested) return undefined;
+  const key = requested.trim().toLowerCase();
+  return pool.find((entry) => entry.label === key || entry.id.toLowerCase() === key);
+}
+
+/** Pool entries in fallback order starting from the chosen one. */
+export function poolFallbackOrder(pool: PoolModel[], chosenId: string): PoolModel[] {
+  const start = pool.findIndex((entry) => entry.id === chosenId);
+  if (start < 0) return pool;
+  return [...pool.slice(start), ...pool.slice(0, start)];
+}
+
+/**
+ * Apply the model policy from config to a requested value.
+ * With a pool: pool labels/ids resolve to the entry's id; anything else (or
+ * nothing) resolves to the first pool entry. Without: enforce/default rules.
+ */
 function policyModel(requested: string | undefined, config: SubagentConfig, label: string, diagnostics: string[]): string {
   if (config.enforceModel) {
     if (requested && requested !== config.enforceModel) diagnostics.push(`${label}: model "${requested}" overridden by enforceModel (${config.enforceModel})`);
     return config.enforceModel;
+  }
+  if (config.models.length > 0) {
+    const entry = poolEntry(config.models, requested);
+    if (entry) return entry.id;
+    if (requested && requested !== "inherit") diagnostics.push(`${label}: model "${requested}" is not in the subagent model pool; using ${config.models[0].label}`);
+    return config.models[0].id;
   }
   if (!requested) return config.defaultModel;
   if (requested === "inherit" || isModelId(requested)) return requested;
@@ -309,7 +377,7 @@ export function workerAgent(config: SubagentConfig, webExtensionPath: string): P
       "Finish with a short, plain report: what you changed (files), what you verified, and anything the parent must still decide or check.",
     ].join("\n"),
     tools,
-    model: config.enforceModel ?? config.defaultModel,
+    model: config.enforceModel ?? (config.models[0]?.id ?? config.defaultModel),
     thinking: config.enforceThinking ?? config.defaultThinking,
     source: "builtin",
     activation: "propose",
