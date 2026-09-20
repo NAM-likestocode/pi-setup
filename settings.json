@@ -1,8 +1,8 @@
 {
-  "lastChangelogVersion": "0.84.1",
-  "theme": "tokyo-night-sol-warning",
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.6-sol",
+  "lastChangelogVersion": "0.85.1",
+  "theme": "tokyo-night",
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-opus-4-8",
   "defaultThinkingLevel": "xhigh",
   "defaultProjectTrust": "ask",
   "packages": [
@@ -12,7 +12,13 @@
     "npm:pi-mcp-adapter@2.15.0",
     "npm:@narumitw/pi-lsp@0.39.0",
     "npm:@braintrust/pi-extension@0.10.0",
-    "npm:pi-voice-stt@0.6.0"
+    "npm:pi-voice-stt@0.6.0",
+    "npm:@gotgenes/pi-anthropic-auth@2.0.8",
+    "git:gist.github.com/isaaclins/9b5101bfd38b906d69580ade466f19bf@f2f965eb9b6afa8913273838161a483554c0fe2a"
   ],
-  "hideThinkingBlock": true
+  "hideThinkingBlock": true,
+  "enabledModels": [
+    "anthropic/claude-fable-5-1",
+    "anthropic/claude-opus-5"
+  ]
 }

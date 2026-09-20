@@ -15,6 +15,8 @@ export const EXPECTED_PACKAGE_SPECS = [
   "npm:@narumitw/pi-lsp@0.39.0",
   "npm:@braintrust/pi-extension@0.10.0",
   "npm:pi-voice-stt@0.6.0",
+  "npm:@gotgenes/pi-anthropic-auth@2.0.8",
+  "git:gist.github.com/isaaclins/9b5101bfd38b906d69580ade466f19bf@f2f965eb9b6afa8913273838161a483554c0fe2a",
 ] as const;
 
 const EXPECTED_NPM_VERSIONS: Record<string, string> = {
@@ -23,6 +25,7 @@ const EXPECTED_NPM_VERSIONS: Record<string, string> = {
   "@narumitw/pi-lsp": "0.39.0",
   "@braintrust/pi-extension": "0.10.0",
   "pi-voice-stt": "0.6.0",
+  "@gotgenes/pi-anthropic-auth": "2.0.8",
 };
 const EXPECTED_ASK_USER_VERSION = "0.14.0";
 const EXPECTED_ASK_USER_OWNER = "NAM-likestocode";

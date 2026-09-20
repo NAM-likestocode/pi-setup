@@ -85,6 +85,20 @@ export interface SubagentConfig {
    * `*-auth` packages under `~/.pi/agent/npm/node_modules`.
    */
   childExtensions: string[];
+  /**
+   * Extensions appended to `childExtensions` (which replaces the auth list
+   * when set), for harness extensions children should also get. Because
+   * children run with a strict `--tools` allowlist,
+   * each entry may name the tools it contributes so they are allowed too.
+   * Missing files are skipped.
+   */
+  extraChildExtensions: ExtraChildExtension[];
+}
+
+export interface ExtraChildExtension {
+  path: string;
+  /** Tool names this extension registers that children should be allowed to use. */
+  tools: string[];
 }
 
 /** One entry of the model pool: a model the parent may pick for a child, with guidance on when. */
@@ -177,6 +191,7 @@ export function defaultConfig(): SubagentConfig {
     defaultMode: "background",
     transcriptDir: defaultTranscriptDir(),
     childExtensions: detectAuthExtensions(),
+    extraChildExtensions: [],
   };
 }
 
@@ -227,6 +242,17 @@ export function loadSubagentConfig(overrides: Partial<SubagentConfig> = {}, conf
     config.childExtensions = merged.childExtensions
       .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
       .map((item) => (item.startsWith("~/") ? join(homedir(), item.slice(2)) : item));
+  }
+  if (Array.isArray(merged.extraChildExtensions)) {
+    config.extraChildExtensions = merged.extraChildExtensions
+      .map((item): ExtraChildExtension | undefined => {
+        const record = item && typeof item === "object" ? item as Record<string, unknown> : undefined;
+        const rawPath = typeof item === "string" ? item : stringValue(record?.path);
+        if (!rawPath) return undefined;
+        const path = rawPath.startsWith("~/") ? join(homedir(), rawPath.slice(2)) : rawPath;
+        return { path, tools: commaList(record?.tools).filter((tool) => TOOL_NAME.test(tool)) };
+      })
+      .filter((item): item is ExtraChildExtension => !!item && existsSync(item.path));
   }
   return config;
 }

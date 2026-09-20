@@ -10,7 +10,6 @@ const DYNAMIC_TOOL_NAMES = new Set([
   "fetch_content",
   "get_search_content",
   "mcp",
-  "subagent",
 ]);
 
 const TOOL_ALIASES: Record<string, string> = {
@@ -19,7 +18,6 @@ const TOOL_ALIASES: Record<string, string> = {
   fetch_content: "fetch url webpage github youtube video transcript content",
   get_search_content: "retrieve previous web result full page content response id",
   mcp: "model context protocol external server gateway remote tools",
-  subagent: "delegate delegation another agent project worker researcher reviewer audit codebase architecture",
 };
 
 type LoaderState = { enabledTools: string[] };
@@ -31,16 +29,6 @@ const SEARCH_PARAMS = Type.Object({
 
 export function isDynamicTool(name: string): boolean {
   return DYNAMIC_TOOL_NAMES.has(name);
-}
-
-export function shouldConsiderSubagent(prompt: string): boolean {
-  const text = prompt.toLowerCase();
-  const explicit = /\b(?:sub[ -]?agents?|delegat(?:e|ion)|another agent)\b/.test(text);
-  const research = /\b(?:research|fact[- ]?check|benchmark|sources?|current|latest|up[- ]to[- ]date)\b/.test(text);
-  const review = /\b(?:review|audit|security|threat model|regression|risk assessment)\b/.test(text);
-  const broadScope = /\b(?:codebase|repository|repo-wide|cross-cutting|architecture|multiple modules|across the project)\b/.test(text);
-  const investigation = /\b(?:explore|map|trace|locate|understand|investigate|find all)\b/.test(text);
-  return explicit || research || review || (broadScope && investigation);
 }
 
 export function searchDynamicTools(tools: ToolInfo[], query: string, limit = 5): string[] {
@@ -83,9 +71,9 @@ export default function dynamicToolLoader(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "search_tools",
     label: "Search Tools",
-    description: "Search for and enable currently inactive web, MCP, or project-subagent tools relevant to a task",
+    description: "Search for and enable currently inactive web or MCP tools relevant to a task",
     promptSnippet: "Search and enable additional tools when the active tools cannot perform the task",
-    promptGuidelines: ["Use search_tools when the task requires a web, MCP, or delegation capability that is not currently active."],
+    promptGuidelines: ["Use search_tools when the task requires a web or MCP capability that is not currently active."],
     parameters: SEARCH_PARAMS,
     async execute(_toolCallId, params) {
       const matches = searchDynamicTools(pi.getAllTools(), params.query, params.limit ?? 5);
@@ -132,10 +120,5 @@ export default function dynamicToolLoader(pi: ExtensionAPI): void {
       return;
     }
     pi.setActiveTools([...new Set([...base, "search_tools", ...enabledTools])]);
-  });
-
-  pi.on("before_agent_start", async (event) => {
-    if (typeof event.prompt !== "string" || !shouldConsiderSubagent(event.prompt)) return;
-    activate(["subagent"]);
   });
 }

@@ -42,11 +42,14 @@ All keys optional:
   "maxDepth": 2,
   "defaultMode": "background",
   "transcriptDir": "~/.local/state/pi/subagents",
-  "childExtensions": ["~/.pi/agent/npm/node_modules/@gotgenes/pi-anthropic-auth/src/index.ts"]
+  "childExtensions": ["~/.pi/agent/npm/node_modules/@gotgenes/pi-anthropic-auth/src/index.ts"],
+  "extraChildExtensions": [{ "path": "~/.pi/agent/extensions/some-extension.ts", "tools": ["some_tool"] }]
 }
 ```
 
-`childExtensions` replaces the auto-detected auth list when given.
+`childExtensions` replaces the auto-detected auth list when given. `extraChildExtensions` is appended to it for harness extensions children should also load (plain path strings are accepted too); each entry lists the tools it registers, because children start with a strict `--tools` allowlist. Missing files are skipped.
+
+Other extensions can inspect or stop runs over the event bus: `pi-subagents:query:v1` with `{ runId, reply }` answers with the run's details, and `pi-subagents:stop:v1` with `{ runId, reply }` aborts a running child.
 
 ## Tool parameters
 

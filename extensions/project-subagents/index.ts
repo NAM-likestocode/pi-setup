@@ -36,7 +36,6 @@ import {
   dashboardActivityForTool,
   type DashboardActivity,
 } from "../_shared/dashboard-activity.ts";
-import { shouldConsiderSubagent } from "../00-dynamic-tool-loader.ts";
 import {
   applyOverrides,
   discoverProjectAgents,
@@ -44,6 +43,7 @@ import {
   poolEntry,
   poolFallbackOrder,
   WORKER_AGENT,
+  type ExtraChildExtension,
   type PoolModel,
   type ProjectAgent,
   type RunMode,
@@ -61,6 +61,9 @@ const MAX_ACTIVITY_ITEMS = 100;
 const MAX_FINISHED_RUNS = 50;
 const STATUS_ID = "project-subagents";
 const THIS_EXTENSION = fileURLToPath(import.meta.url);
+/** Event-bus channels other extensions may use to inspect or stop runs. */
+export const SUBAGENT_QUERY_CHANNEL = "pi-subagents:query:v1";
+export const SUBAGENT_STOP_CHANNEL = "pi-subagents:stop:v1";
 
 interface ActivitySummary {
   label: string;
@@ -408,6 +411,8 @@ interface ChildOptions {
   maxDepth: number;
   /** Extra extension files every child loads (provider auth shims etc.). */
   childExtensions: string[];
+  /** Harness extensions children also load, with the tools they contribute (see `extraChildExtensions`). */
+  extraChildExtensions: ExtraChildExtension[];
   model?: string;
   thinking?: string;
   transcript?: WriteStream;
@@ -444,9 +449,12 @@ async function runChild(pi: ExtensionAPI, runId: string, options: ChildOptions):
     "--append-system-prompt", promptFile,
   ];
   for (const extensionPath of options.childExtensions) args.push("--extension", extensionPath);
+  for (const extra of options.extraChildExtensions) args.push("--extension", extra.path);
   if (canDelegate) args.push("--extension", THIS_EXTENSION);
   for (const extensionPath of agent.extensionPaths) args.push("--extension", extensionPath);
-  if (agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
+  // `--tools` is a strict allowlist for every tool, so extra extensions' tools must be listed too.
+  const extraTools = options.extraChildExtensions.flatMap((extra) => extra.tools);
+  if (agent.tools.length > 0) args.push("--tools", [...new Set([...agent.tools, ...extraTools])].join(","));
   else args.push("--no-tools");
   if (options.model) args.push("--model", options.model);
   if (options.thinking) args.push("--thinking", options.thinking);
@@ -736,6 +744,7 @@ export default function projectSubagents(pi: ExtensionAPI): void {
       depth,
       maxDepth: config.maxDepth,
       childExtensions: config.childExtensions,
+      extraChildExtensions: config.extraChildExtensions,
       model: details.model,
       thinking: details.thinking,
       transcript,
@@ -792,10 +801,10 @@ export default function projectSubagents(pi: ExtensionAPI): void {
     name: "subagent",
     label: "Subagent",
     description: `Delegate a bounded task to an isolated child Pi that runs in the background while you continue. Default profile "${WORKER_AGENT}" has full tools; named specialists may also be available. The child does not see this conversation, so put everything it needs into the task. Its report arrives later as a message beginning with [Subagent "<name>" …]; use mode "wait" if you need the result before you can continue.${poolText}`,
-    promptSnippet: "Delegate separable work to background subagents and keep working meanwhile",
+    promptSnippet: "Delegate separable work to background subagents by default and keep working meanwhile",
     promptGuidelines: [
-      "Use subagent for work that can proceed independently: implementing a separate feature or module, a broad investigation, a review, or verification that would otherwise block you.",
-      "Do not delegate trivial steps, single small edits, or anything that needs this conversation's context the child cannot be given in the task text.",
+      "Delegate by default, not as a last resort: whenever a task has separable parts (a feature or module, a broad investigation, a review, verification, research), start subagents for them and keep working on the rest yourself.",
+      "Do not delegate trivial steps, single small edits, quick answers, or anything that needs this conversation's context the child cannot be given in the task text.",
       "Give each child a self-contained task with paths, commands, and acceptance criteria; several children may run at once on disjoint scopes. Avoid two children editing the same files.",
       "After a [Subagent …] report arrives, verify what matters (diff, tests) before building on it.",
     ],
@@ -1044,20 +1053,43 @@ export default function projectSubagents(pi: ExtensionAPI): void {
     for (const run of running()) run.abort.abort();
   });
 
+  // Event-bus hooks for other harness extensions (query a run's live status, or stop a
+  // stuck run). Both reply synchronously.
+  pi.events.on(SUBAGENT_QUERY_CHANNEL, (data) => {
+    const request = data as { runId?: string; reply?: (details: SubagentDetails | undefined) => void } | undefined;
+    if (!request || typeof request.reply !== "function") return;
+    const run = typeof request.runId === "string" ? runs.get(request.runId) : undefined;
+    request.reply(run ? { ...run.details, activities: [...run.details.activities] } : undefined);
+  });
+  pi.events.on(SUBAGENT_STOP_CHANNEL, (data) => {
+    const request = data as { runId?: string; reply?: (result: { stopped: boolean; message: string }) => void } | undefined;
+    if (!request || typeof request.reply !== "function") return;
+    const run = typeof request.runId === "string" ? runs.get(request.runId) : undefined;
+    if (!run) {
+      request.reply({ stopped: false, message: `No subagent with id ${request.runId ?? "(none)"} in this session.` });
+      return;
+    }
+    if (run.details.status !== "running" && run.details.status !== "awaiting-approval") {
+      request.reply({ stopped: false, message: `Subagent "${run.details.name}" (${run.details.runId}) is already ${run.details.status}.` });
+      return;
+    }
+    run.abort.abort();
+    refreshStatus(lastUiContext);
+    request.reply({ stopped: true, message: `Stopping subagent "${run.details.name}" (${run.details.runId}) after ${run.details.activities.length} tool calls.` });
+  });
+
   pi.on("before_agent_start", (event, ctx) => {
     lastUiContext = ctx;
     if (!ctx.isProjectTrusted()) return;
+    // The tool is always active; the policy below goes with it on every turn so
+    // delegation is a default habit rather than something the prompt must hint at.
+    if (!pi.getActiveTools().includes("subagent")) return;
     const discovery = discoverProjectAgents(ctx.cwd);
 
     const prompt = event.prompt.toLowerCase();
+    // Profiles with `activation: explicit` are only listed when the user names them or asks for delegation.
     const explicitlyMentionsDelegation = /\b(?:sub[ -]?agents?|delegat(?:e|ion)|another agent|in the background|in parallel|worker)\b/.test(prompt)
       || discovery.agents.some((agent) => agent.name !== WORKER_AGENT && prompt.includes(agent.name.toLowerCase()));
-    if (!explicitlyMentionsDelegation && !shouldConsiderSubagent(event.prompt)) return;
-
-    if (explicitlyMentionsDelegation && !pi.getActiveTools().includes("subagent")) {
-      pi.setActiveTools([...new Set([...pi.getActiveTools(), "subagent"])]);
-    }
-    if (!pi.getActiveTools().includes("subagent")) return;
 
     const eligible = explicitlyMentionsDelegation
       ? discovery.agents
@@ -1073,7 +1105,7 @@ export default function projectSubagents(pi: ExtensionAPI): void {
       ? `\nCurrently running: ${active.map((run) => `${run.details.name} (${run.details.runId})`).join(", ")}. Their reports will arrive as messages.`
       : "";
     return {
-      systemPrompt: `${event.systemPrompt}\n\nSubagent profiles available:\n${list}${poolLine}${activeLine}\n\nDelegation policy:\n- Subagents run in the background by default; you get a message beginning with [Subagent "<name>" …] when one finishes. Keep working on other parts meanwhile; do not poll or wait unless you used mode "wait".\n- Delegate work that is separable and self-contained: another feature or module, a broad investigation, an independent review, or verification. Give the child every path, command, and acceptance criterion it needs; it cannot see this conversation.\n- Do not delegate trivial steps or work that needs context you cannot write down. Avoid two children editing the same files.\n- Treat reports as evidence, not authority: check the diff and run the relevant tests before building on them.${config.models.length > 0 ? "\n- Choose the child's model deliberately per task using the pool guidance above." : ""}`,
+      systemPrompt: `${event.systemPrompt}\n\nSubagent profiles available:\n${list}${poolLine}${activeLine}\n\nDelegation policy:\n- Delegate by default, not as a last resort. Before starting any task with more than one separable part, split it and hand each separable part to a subagent: a feature or module, a broad investigation, an independent review, verification, research. Keep working on the rest yourself; several children may run at once on disjoint scopes.\n- Subagents run in the background; you get a message beginning with [Subagent "<name>" …] when one finishes. Never poll or idle for it. If nothing else remains, end your turn and the report will arrive on its own; for long runs also arm a defer trigger as a guard so a stalled child is noticed. Use mode "wait" only when the result is needed before you can take the next step.\n- Give the child every path, command, and acceptance criterion it needs; it cannot see this conversation. Avoid two children editing the same files.\n- Keep for yourself: trivial steps, single small edits, quick answers, and work that needs context you cannot write down.\n- Treat reports as evidence, not authority: check the diff and run the relevant tests before building on them.${config.models.length > 0 ? "\n- Choose the child's model deliberately per task using the pool guidance above." : ""}`,
     };
   });
 }

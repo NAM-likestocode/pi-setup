@@ -3,8 +3,8 @@
   "capture": {
     "type": "ffmpeg",
     "ffmpegPath": "ffmpeg",
-    "inputFormat": "dshow",
-    "input": "audio=Microphone (Elgato Wave XLR)",
+    "inputFormat": "pulse",
+    "input": "default",
     "sampleRate": 16000,
     "channels": 1,
     "maxSeconds": 120,

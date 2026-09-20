@@ -48,11 +48,11 @@ Remove this patch after upgrading to an upstream release that gracefully finaliz
 
 ## Dynamic tool loading
 
-Web, MCP, and project-subagent tools begin inactive in a fresh session. `search_tools` loads matching registered tools additively, allowing GPT-5.6's native Responses tool-search protocol to preserve the stable prompt prefix. Loaded tools persist in the session branch.
+Web and MCP tools begin inactive in a fresh session. `search_tools` loads matching registered tools additively, allowing GPT-5.6's native Responses tool-search protocol to preserve the stable prompt prefix. Loaded tools persist in the session branch.
 
 - `/tool-loader status` lists loaded dynamic tools.
 - `/tool-loader reset` returns those groups to on-demand loading.
-- Clear research, review, or broad code-mapping prompts may expose the `subagent` tool; this only makes a specialist available and never starts one.
+- The `subagent` tool is deliberately *not* dynamic: it is active on every turn, and the project-subagents extension appends its profile list, model pool and a delegate-by-default policy to the system prompt each turn, so delegation does not depend on the user's wording. `APPEND_SYSTEM.md` carries the matching "delegate and defer" working-style rules. `/delegation off` still blocks new runs for a session.
 
 ## Dependency audit boundary
 
@@ -75,6 +75,30 @@ The no-approval child works in a staged copy of this global harness, cannot use 
 The planner tools are enabled only while the canvas is open. `visual_planner_read` reads stable ids and the current revision. `visual_planner_propose` validates and stages a batch without changing the board; only browser acceptance applies it. Detailed plan mode permits both tools because they preserve its review boundary. The server binds only to `127.0.0.1`, authenticates HTTP and WebSocket access with a fresh launch token, exposes no shell or arbitrary paths, and stops during session shutdown.
 
 Build the ignored browser output after installation or source changes with `npm run planner:build`. See `extensions/visual-planner/README.md` for the complete workflow and security model.
+
+## Idea council
+
+`/council <model> <idea>` convenes four advisors — Optimist, Skeptic, CFO, Operator — as separate headless Pi children on the model named in the command, lets them rebut each other for a round, and returns one chair verdict as a single session message. `opus5max` style specs resolve to an exact `provider/id` plus thinking level; `/council models` lists valid names.
+
+Members run with `--no-session --no-extensions --no-skills --no-context-files` and no file or shell tools. Web research is enabled by default through the pinned `pi-web-access` capability, so the idea text reaches the search provider; `--no-web` keeps a run local. Because `--no-extensions` also drops provider auth, members on `anthropic/*` automatically load `@gotgenes/pi-anthropic-auth`, without which the child is rejected as an unauthenticated third-party app.
+
+A default run is nine model calls (`4 × 2 rounds + chair`), so the command always asks for confirmation first and `--quick` halves it. Recursion is blocked twice: the extension does not register when `PI_COUNCIL_MEMBER=1`, and the spawn helper refuses under the same variable and only ever relaunches `process.argv[1]` when that script is the Pi CLI itself. See `extensions/council/README.md`.
+
+## Deferred wake-ups
+
+The `pi-defer-tool` package (installed from `gist.github.com/isaaclins/9b5101bfd38b906d69580ade466f19bf`) gives Pi a `defer` tool so it can come back to something later without blocking a turn or polling in a shell loop. `create` arms a trigger with a note and either a time (`at`: `2am`, `14:30`, `in 30m`, ISO timestamp) or a condition (`check`: a shell command polled every `pollMs` until it exits 0, always firing by `timeoutMs` at the latest); an optional `run` command executes at fire time and its bounded output comes back with the wake-up. `list` and `cancel` manage armed triggers, and a terminal widget shows their state and time remaining.
+
+Triggers live only for the current Pi process: they survive `/reload` (same process) but quitting Pi cancels them. `check` and `run` execute through `bash -c` with Pi's permissions, so treat them like bash tool calls.
+
+## Quiet footer
+
+`extensions/quiet-footer.ts` adds `/verbose on|off|toggle|status`. `off` replaces the built-in footer through `ctx.ui.setFooter` with a reduced one: path and session name; context usage (yellow above 70 %, red above 90 %) with the model and thinking level; and a third line only when an extension status signals something active or worth attention (autopilot, delegation off, running subagents, plan mode, council, premium model, workaround fixer, defer triggers). Token counters, cache stats, cost, the provider prefix, the `(auto)` compaction tag, the git branch and purely informational statuses (`mcp`, `braintrust`, `anywhere`, `pi-lsp`) are dropped; the hidden keys live in `HIDDEN_STATUS_KEYS`. The choice persists in `~/.pi/agent/footer.json`; `on` restores the default footer.
+
+The `MCP: N servers enabled` line comes from `pi-mcp-adapter`, which shows it whenever any server is configured (here Obsidian in `~/.config/mcp/mcp.json`) and offers no setting to hide it, which is why filtering happens in the footer.
+
+## Headless `/reload`
+
+The terminal UI handles `/reload` before extension commands are dispatched, and RPC mode has no reload command, so a front-end that forwards typed text as a prompt (pi-desk) would send "/reload" to the model. `extensions/headless-reload.ts` registers an extension command `reload` only when `ctx.mode` is not `tui`; it refuses while a response is running, calls `ctx.reload()`, and the freshly loaded instance confirms with a notification. In the TUI nothing is registered, so the built-in and its autocomplete are untouched.
 
 ## Code intelligence and tracing
 
