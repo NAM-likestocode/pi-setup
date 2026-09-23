@@ -3,6 +3,7 @@
 /trust.json
 /sessions/
 /run-history.jsonl
+/crashes.json
 /mcp-cache.json
 /models-store.json
 /models-store.json.*

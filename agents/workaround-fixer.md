@@ -2,7 +2,7 @@
 name: workaround-fixer
 description: Repairs a recurring operational workaround the main Pi agent itself had to use by improving the global Pi harness
 tools: read, grep, find, ls, edit, write, web_search, source_check, fetch_content, get_search_content
-model: openai-codex/gpt-5.6-sol
+model: openai-codex/gpt-6-sol
 thinking: xhigh
 activation: explicit
 capabilities: web

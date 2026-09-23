@@ -18,7 +18,7 @@ export const WORKER_AGENT = "worker";
  * `enforceModel` / `enforceThinking` in `~/.pi/agent/subagents.json` to restore
  * it); still used by `auto-workaround-fixer` for its own automatic child.
  */
-export const ENFORCED_SUBAGENT_MODEL = "openai-codex/gpt-5.6-sol";
+export const ENFORCED_SUBAGENT_MODEL = "openai-codex/gpt-6-sol";
 export const ENFORCED_SUBAGENT_THINKING: AgentThinking = "xhigh";
 
 export interface ProjectAgent {

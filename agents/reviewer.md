@@ -2,7 +2,7 @@
 name: reviewer
 description: Independently checks a larger or riskier change for concrete bugs, missed requirements, and regressions without editing anything
 tools: read, grep, find, ls
-model: openai-codex/gpt-5.6-sol
+model: openai-codex/gpt-6-sol
 thinking: xhigh
 activation: propose
 ---

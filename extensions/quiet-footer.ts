@@ -5,7 +5,7 @@
  * Kept:    path · session name, context usage (coloured when high), model and
  *          thinking level, and extension statuses that signal an *active* mode
  *          or warning (autopilot, delegation off, running subagents, plan mode,
- *          council, premium model, workaround fixer, defer triggers, …).
+ *          council, workaround fixer, defer triggers, …).
  * Hidden:  token counters, cache stats, cost, provider prefix, "(auto)" tag,
  *          git branch, and purely informational statuses (MCP server count,
  *          Braintrust tracing, Pimo companion, transient LSP activity).

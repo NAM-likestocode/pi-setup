@@ -15,7 +15,7 @@ export const EXPECTED_PACKAGE_SPECS = [
   "npm:@narumitw/pi-lsp@0.39.0",
   "npm:@braintrust/pi-extension@0.10.0",
   "npm:pi-voice-stt@0.6.0",
-  "npm:@gotgenes/pi-anthropic-auth@2.0.8",
+  "npm:@gotgenes/pi-anthropic-auth@3.2.2",
   "git:gist.github.com/isaaclins/9b5101bfd38b906d69580ade466f19bf@f2f965eb9b6afa8913273838161a483554c0fe2a",
 ] as const;
 
@@ -25,7 +25,7 @@ const EXPECTED_NPM_VERSIONS: Record<string, string> = {
   "@narumitw/pi-lsp": "0.39.0",
   "@braintrust/pi-extension": "0.10.0",
   "pi-voice-stt": "0.6.0",
-  "@gotgenes/pi-anthropic-auth": "2.0.8",
+  "@gotgenes/pi-anthropic-auth": "3.2.2",
 };
 const EXPECTED_ASK_USER_VERSION = "0.14.0";
 const EXPECTED_ASK_USER_OWNER = "NAM-likestocode";
@@ -187,7 +187,7 @@ export async function collectHarnessChecks(agentDir: string, activeTools: string
       const frontmatter = source.split("---")[1] ?? "";
       const tools = frontmatter.match(/^tools:\s*(.+)$/m)?.[1] ?? "";
       if (!/^activation:\s*propose\s*$/m.test(frontmatter)) specialistIssues.push(`${file}: not proposal-enabled`);
-      if (!/^model:\s*openai-codex\/gpt-5\.6-sol\s*$/m.test(frontmatter)) specialistIssues.push(`${file}: model is not openai-codex/gpt-5.6-sol`);
+      if (!/^model:\s*openai-codex\/gpt-6-sol\s*$/m.test(frontmatter)) specialistIssues.push(`${file}: model is not openai-codex/gpt-6-sol`);
       if (!/^thinking:\s*xhigh\s*$/m.test(frontmatter)) specialistIssues.push(`${file}: thinking is not xhigh`);
       if (/(?:^|,\s*)(?:bash|edit|write)(?:\s*,|$)/i.test(tools)) specialistIssues.push(`${file}: has mutating or shell access`);
     } catch {
@@ -201,7 +201,7 @@ export async function collectHarnessChecks(agentDir: string, activeTools: string
     if (!/^activation:\s*explicit\s*$/m.test(frontmatter)) specialistIssues.push("workaround-fixer.md: generic activation is not explicit");
     if (!/^automatic:\s*true\s*$/m.test(frontmatter)) specialistIssues.push("workaround-fixer.md: automatic marker missing");
     if (!/^scope:\s*pi-harness\s*$/m.test(frontmatter)) specialistIssues.push("workaround-fixer.md: scope is not pi-harness");
-    if (!/^model:\s*openai-codex\/gpt-5\.6-sol\s*$/m.test(frontmatter)) specialistIssues.push("workaround-fixer.md: model is not openai-codex/gpt-5.6-sol");
+    if (!/^model:\s*openai-codex\/gpt-6-sol\s*$/m.test(frontmatter)) specialistIssues.push("workaround-fixer.md: model is not openai-codex/gpt-6-sol");
     if (!/^thinking:\s*xhigh\s*$/m.test(frontmatter)) specialistIssues.push("workaround-fixer.md: thinking is not xhigh");
     if (!/(?:^|,\s*)edit(?:\s*,|$)/i.test(tools) || !/(?:^|,\s*)write(?:\s*,|$)/i.test(tools)) specialistIssues.push("workaround-fixer.md: staged write tools missing");
     if (/(?:^|,\s*)bash(?:\s*,|$)/i.test(tools)) specialistIssues.push("workaround-fixer.md: arbitrary shell access enabled");
@@ -211,7 +211,7 @@ export async function collectHarnessChecks(agentDir: string, activeTools: string
   checks.push({
     level: specialistIssues.length === 0 ? "pass" : "fail",
     label: "Specialist roster",
-    detail: specialistIssues.length === 0 ? "three proposal-only read-only specialists plus the staged automatic Pi workaround fixer use gpt-5.6-sol/xhigh" : specialistIssues.join("; "),
+    detail: specialistIssues.length === 0 ? "three proposal-only read-only specialists plus the staged automatic Pi workaround fixer use gpt-6-sol/xhigh" : specialistIssues.join("; "),
   });
 
   checks.push({

@@ -1,24 +1,28 @@
 {
-  "lastChangelogVersion": "0.85.1",
+  "lastChangelogVersion": "0.87.1",
   "theme": "tokyo-night",
   "defaultProvider": "anthropic",
-  "defaultModel": "claude-opus-4-8",
+  "defaultModel": "claude-opus-5-5",
   "defaultThinkingLevel": "xhigh",
   "defaultProjectTrust": "ask",
   "packages": [
     "git:github.com/MasuRii/pi-image-tools@b8977bbb4f416fd63db7c7c602db6dfe7b17f62c",
-    "git:github.com/NAM-likestocode/pi-ask-user@b01089e7f67318e7d4fc3a44ad043c6d16c096e5",
     "npm:pi-web-access@0.15.0",
     "npm:pi-mcp-adapter@2.15.0",
     "npm:@narumitw/pi-lsp@0.39.0",
     "npm:@braintrust/pi-extension@0.10.0",
     "npm:pi-voice-stt@0.6.0",
-    "npm:@gotgenes/pi-anthropic-auth@2.0.8",
+    "npm:@gotgenes/pi-anthropic-auth@3.2.2",
     "git:gist.github.com/isaaclins/9b5101bfd38b906d69580ade466f19bf@f2f965eb9b6afa8913273838161a483554c0fe2a"
   ],
   "hideThinkingBlock": true,
   "enabledModels": [
     "anthropic/claude-fable-5-1",
-    "anthropic/claude-opus-5"
-  ]
+    "anthropic/claude-opus-5-5",
+    "openai-codex/gpt-6-sol",
+    "openai-codex/gpt-6-luna"
+  ],
+  "terminal": {
+    "showImages": false
+  }
 }

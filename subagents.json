@@ -6,14 +6,20 @@
   "models": [
     {
       "label": "opus",
-      "id": "anthropic/claude-opus-5",
+      "id": "anthropic/claude-opus-5-5",
+      "thinking": "xhigh",
+      "use": "default for all subagent work: implementation, commands and tests, design analysis, review, research"
+    },
+    {
+      "label": "sol",
+      "id": "openai-codex/gpt-6-sol",
       "thinking": "xhigh",
       "use": "implementation and hands-on work in the repo: writing or editing code, running commands and tests, fixing failures, refactors, anything that touches files"
     },
     {
       "label": "luna",
-      "id": "openai-codex/gpt-5.6-luna",
-      "thinking": "max",
+      "id": "openai-codex/gpt-6-luna",
+      "thinking": "xhigh",
       "use": "deep thinking without much tool use: architecture and design questions, tricky debugging analysis, independent code review, research and evidence-weighing, long reasoning chains"
     }
   ]
